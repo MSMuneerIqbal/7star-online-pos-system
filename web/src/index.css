@@ -1,0 +1,111 @@
+@import 'tailwindcss';
+
+/**
+ * Design tokens.
+ *
+ * This is a dense data-entry admin app — operators enter invoices all day on
+ * desktop. The scale is deliberately tighter than Tailwind's web defaults:
+ * smaller base text, compact rows, so a full invoice grid fits without scrolling.
+ */
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+
+  --text-xs: 0.6875rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-lg: 1rem;
+
+  /* Brand — a battery/industrial blue */
+  --color-brand-50: oklch(0.97 0.02 250);
+  --color-brand-100: oklch(0.93 0.04 250);
+  --color-brand-200: oklch(0.87 0.07 250);
+  --color-brand-300: oklch(0.78 0.11 250);
+  --color-brand-400: oklch(0.68 0.15 250);
+  --color-brand-500: oklch(0.58 0.18 250);
+  --color-brand-600: oklch(0.5 0.18 250);
+  --color-brand-700: oklch(0.42 0.15 250);
+  --color-brand-800: oklch(0.34 0.11 250);
+  --color-brand-900: oklch(0.27 0.08 250);
+
+  --spacing-row: 0.375rem;
+}
+
+@layer base {
+  html {
+    font-size: 16px;
+  }
+
+  body {
+    @apply bg-slate-100 text-slate-900 antialiased;
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+  }
+
+  /* Money and quantities line up in columns when tabular. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/**
+ * Shared primitives.
+ *
+ * Declared with `@utility` rather than `@layer components` so they can be
+ * composed with `@apply` — in Tailwind v4 `@apply` only accepts real utilities,
+ * so a `.btn-primary` defined in @layer cannot apply a `.btn` defined there too.
+ */
+@utility btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5
+         text-sm font-medium transition
+         focus-visible:outline-2 focus-visible:outline-offset-2
+         disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+@utility btn-primary {
+  @apply btn bg-brand-600 text-white hover:bg-brand-700 focus-visible:outline-brand-600;
+}
+
+@utility btn-secondary {
+  @apply btn border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+}
+
+@utility btn-danger {
+  @apply btn bg-red-600 text-white hover:bg-red-700;
+}
+
+@utility field-label {
+  @apply mb-1 block text-xs font-medium text-slate-600;
+}
+
+@utility field-input {
+  @apply w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm
+         shadow-xs outline-none transition
+         placeholder:text-slate-400
+         focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20
+         disabled:bg-slate-50 disabled:text-slate-500;
+}
+
+@utility field-error {
+  @apply mt-1 text-xs text-red-600;
+}
+
+@utility card {
+  @apply rounded-lg border border-slate-200 bg-white shadow-xs;
+}
+
+/* Invoice and voucher print layouts (13 of them) render through these. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    @apply bg-white text-black;
+    font-size: 11pt;
+  }
+
+  @page {
+    margin: 12mm;
+  }
+}

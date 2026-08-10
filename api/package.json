@@ -1,0 +1,49 @@
+{
+  "name": "7star-pos-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "migrate:up": "node-pg-migrate up -m migrations -j sql",
+    "migrate:down": "node-pg-migrate down -m migrations -j sql",
+    "db:types": "kysely-codegen --dialect postgres --out-file src/core/db/generated.d.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^10.0.2",
+    "@fastify/helmet": "^13.0.1",
+    "@fastify/multipart": "^9.0.3",
+    "@fastify/rate-limit": "^10.2.2",
+    "@fastify/static": "^8.0.4",
+    "argon2": "^0.41.1",
+    "decimal.js": "^10.4.3",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "fastify": "^5.2.1",
+    "fastify-plugin": "^5.0.1",
+    "fastify-type-provider-zod": "^4.0.2",
+    "jose": "^5.9.6",
+    "kysely": "^0.27.5",
+    "pg": "^8.13.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "kysely-codegen": "^0.17.0",
+    "node-pg-migrate": "^7.9.0",
+    "pino-pretty": "^13.1.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

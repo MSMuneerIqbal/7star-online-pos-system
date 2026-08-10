@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+*.log
+uploads/
+coverage/
+src/core/db/generated.d.ts
