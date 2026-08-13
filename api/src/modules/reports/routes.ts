@@ -11,6 +11,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { formPermissions } from '../../core/crud.js';
+import { buildReportWorkbook } from './excel.js';
 import * as service from './service.js';
 
 const STOCK_RAW = formPermissions(31, 601);
@@ -116,11 +117,182 @@ export default async function reportRoutes(app: FastifyInstance): Promise<void> 
 
   app.get('/income-statement', {
     preHandler: app.requireAction(INCOME_STATEMENT.formId, INCOME_STATEMENT.view),
-    handler: async (req) => service.getIncomeStatement(req.principal, rangeQuery.parse(req.query)),
+    handler: async (req) => service.getIncomeStatementWithMargin(req.principal, rangeQuery.parse(req.query)),
   });
 
   app.get('/balance-sheet', {
     preHandler: app.requireAction(BALANCE_SHEET.formId, BALANCE_SHEET.view),
     handler: async (req) => service.getBalanceSheet(req.principal, asAtQuery.parse(req.query)),
+  });
+
+  // ---- new reports -------------------------------------------------------
+  app.get('/low-stock', {
+    preHandler: app.requireAction(STOCK_FINISH.formId, STOCK_FINISH.view),
+    handler: async (req) => {
+      const q = z.object({ branchId: z.coerce.number().int().optional() }).parse(req.query);
+      return service.getLowStock(req.principal, q);
+    },
+  });
+
+  app.get('/dead-stock', {
+    preHandler: app.requireAction(STOCK_FINISH.formId, STOCK_FINISH.view),
+    handler: async (req) => {
+      const q = z.object({ branchId: z.coerce.number().int().optional(), days: z.coerce.number().int().optional() }).parse(req.query);
+      return service.getDeadStock(req.principal, q);
+    },
+  });
+
+  app.get('/aged-receivables', {
+    preHandler: app.requireAction(SALE_REPORT.formId, SALE_REPORT.view),
+    handler: async (req) => {
+      const q = z.object({ branchId: z.coerce.number().int().optional() }).parse(req.query);
+      return service.getAgedReceivables(req.principal, q);
+    },
+  });
+
+  // ---- excel exports -----------------------------------------------------
+  app.get('/stock/finish/export', {
+    preHandler: app.requireAction(STOCK_FINISH.formId, STOCK_FINISH.view),
+    handler: async (req, reply) => {
+      const q = asAtQuery.parse(req.query);
+      const r = await service.getStockReport(req.principal, { kind: 'FINISH', ...q });
+      const buf = await buildReportWorkbook({
+        title: `Stock Report — Finish (as at ${r.asAt})`,
+        summary: [{ label: 'Total value at cost', value: r.totalValue }],
+        columns: [
+          { header: 'Item', key: 'name' },
+          { header: 'Opening', key: 'opening' },
+          { header: 'In', key: 'inQty' },
+          { header: 'Out', key: 'outQty' },
+          { header: 'Closing', key: 'closing' },
+          { header: 'Reorder', key: 'reorderLevel' },
+          { header: 'Value', key: 'value' },
+        ],
+        rows: r.rows,
+      });
+      reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      reply.header('Content-Disposition', 'attachment; filename="stock-report.xlsx"');
+      return reply.send(buf);
+    },
+  });
+
+  app.get('/sales/export', {
+    preHandler: app.requireAction(SALE_REPORT.formId, SALE_REPORT.view),
+    handler: async (req, reply) => {
+      const r = await service.getSaleReport(req.principal, rangeQuery.parse(req.query));
+      const buf = await buildReportWorkbook({
+        title: `Sale Report (${r.from} to ${r.to})`,
+        summary: [
+          { label: 'Gross', value: r.totals.gross },
+          { label: 'Net', value: r.totals.net },
+          { label: 'Received', value: r.totals.received },
+          { label: 'Remaining', value: r.totals.remaining },
+        ],
+        columns: [
+          { header: 'Invoice', key: 'id' },
+          { header: 'Date', key: 'date' },
+          { header: 'Customer', key: 'party' },
+          { header: 'Gross', key: 'gross_total' },
+          { header: 'Discount', key: 'discount' },
+          { header: 'Net', key: 'net_total' },
+          { header: 'Received', key: 'received' },
+          { header: 'Remaining', key: 'remaining' },
+        ],
+        rows: r.rows,
+      });
+      reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      reply.header('Content-Disposition', 'attachment; filename="sale-report.xlsx"');
+      return reply.send(buf);
+    },
+  });
+
+  app.get('/purchases/export', {
+    preHandler: app.requireAction(PURCHASE_REPORT.formId, PURCHASE_REPORT.view),
+    handler: async (req, reply) => {
+      const r = await service.getPurchaseReport(req.principal, rangeQuery.parse(req.query));
+      const buf = await buildReportWorkbook({
+        title: `Purchase Report (${r.from} to ${r.to})`,
+        summary: [
+          { label: 'Sub total', value: r.totals.sub },
+          { label: 'Freight', value: r.totals.freight },
+          { label: 'Net', value: r.totals.net },
+        ],
+        columns: [
+          { header: 'Invoice', key: 'id' },
+          { header: 'Date', key: 'date' },
+          { header: 'Supplier', key: 'party' },
+          { header: 'Sub total', key: 'sub_total' },
+          { header: 'Freight', key: 'rent' },
+          { header: 'Net', key: 'net_total' },
+          { header: 'Paid', key: 'paid' },
+        ],
+        rows: r.rows,
+      });
+      reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      reply.header('Content-Disposition', 'attachment; filename="purchase-report.xlsx"');
+      return reply.send(buf);
+    },
+  });
+
+  app.get('/income-statement/export', {
+    preHandler: app.requireAction(INCOME_STATEMENT.formId, INCOME_STATEMENT.view),
+    handler: async (req, reply) => {
+      const r = await service.getIncomeStatementWithMargin(req.principal, rangeQuery.parse(req.query));
+      const buf = await buildReportWorkbook({
+        title: `Income Statement (${r.from} to ${r.to})`,
+        summary: [
+          { label: 'Revenue', value: r.totalRevenue },
+          { label: 'Cost of goods sold', value: r.totalCogs },
+          { label: 'Gross margin', value: r.grossMargin },
+          { label: 'Operating expenses', value: r.totalOperating },
+          { label: 'Net profit', value: r.netProfit },
+        ],
+        columns: [
+          { header: 'Account', key: 'name' },
+          { header: 'Amount', key: 'amount' },
+        ],
+        rows: [
+          ...r.revenue.map((l) => ({ name: l.name, amount: l.amount })),
+          { name: '— Cost of goods sold —', amount: r.totalCogs },
+          ...r.cogs.map((l) => ({ name: l.name, amount: l.amount })),
+          { name: '— Operating expenses —', amount: r.totalOperating },
+          ...r.operating.map((l) => ({ name: l.name, amount: l.amount })),
+        ],
+      });
+      reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      reply.header('Content-Disposition', 'attachment; filename="income-statement.xlsx"');
+      return reply.send(buf);
+    },
+  });
+
+  app.get('/balance-sheet/export', {
+    preHandler: app.requireAction(BALANCE_SHEET.formId, BALANCE_SHEET.view),
+    handler: async (req, reply) => {
+      const r = await service.getBalanceSheet(req.principal, asAtQuery.parse(req.query));
+      const buf = await buildReportWorkbook({
+        title: `Balance Sheet (as at ${r.asAt})`,
+        summary: [
+          { label: 'Total assets', value: r.totalAssets },
+          { label: 'Total liabilities', value: r.totalLiabilities },
+          { label: 'Total equity', value: r.totalEquity },
+          { label: 'Retained profit', value: r.retainedProfit },
+        ],
+        columns: [
+          { header: 'Account', key: 'name' },
+          { header: 'Amount', key: 'amount' },
+        ],
+        rows: [
+          { name: '— Assets —', amount: '' },
+          ...r.assets.map((l) => ({ name: l.name, amount: l.amount })),
+          { name: '— Liabilities —', amount: '' },
+          ...r.liabilities.map((l) => ({ name: l.name, amount: l.amount })),
+          { name: '— Equity —', amount: '' },
+          ...r.equity.map((l) => ({ name: l.name, amount: l.amount })),
+        ],
+      });
+      reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      reply.header('Content-Disposition', 'attachment; filename="balance-sheet.xlsx"');
+      return reply.send(buf);
+    },
   });
 }

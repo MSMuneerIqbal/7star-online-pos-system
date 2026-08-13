@@ -481,3 +481,171 @@ export async function getBalanceSheet(
     balanced: totalAssets === totalEquityAndLiabilities,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Low stock — closing quantity below the branch's threshold
+// ---------------------------------------------------------------------------
+
+export async function getLowStock(
+  principal: Principal,
+  opts: { branchId?: number | undefined },
+) {
+  const branchId = scope(principal, opts.branchId);
+
+  const rows = await sql<{
+    pid: number;
+    name: string | null;
+    closing: string;
+    threshold: string;
+  }>`
+    WITH moves AS (
+      SELECT pid, SUM(qty) AS closing
+      FROM   stock_movement
+      WHERE  kind = 'FINISH'
+      ${branchId === null ? sql`` : sql`AND branch_id = ${branchId}`}
+      GROUP  BY pid
+    )
+    SELECT p.id AS pid, p.name,
+           COALESCE(m.closing, 0)::text AS closing,
+           bp.low_stock_threshold::text AS threshold
+    FROM   product p
+    JOIN   branch_product bp ON bp.product_id = p.id
+    ${branchId === null ? sql`` : sql`AND bp.branch_id = ${branchId}`}
+    LEFT   JOIN moves m ON m.pid = p.id
+    WHERE  p.is_active
+      AND  COALESCE(m.closing, 0) < bp.low_stock_threshold
+    ORDER  BY p.name
+  `.execute(db);
+
+  return { rows: rows.rows, count: rows.rows.length };
+}
+
+// ---------------------------------------------------------------------------
+// Dead stock — no movement in ninety days, per branch
+// ---------------------------------------------------------------------------
+
+export async function getDeadStock(
+  principal: Principal,
+  opts: { branchId?: number | undefined; days?: number | undefined },
+) {
+  const branchId = scope(principal, opts.branchId);
+  const days = opts.days ?? 90;
+
+  const rows = await sql<{
+    pid: number;
+    name: string | null;
+    closing: string;
+    lastMoved: string | null;
+  }>`
+    WITH moves AS (
+      SELECT pid, SUM(qty) AS closing, MAX(date) AS last_moved
+      FROM   stock_movement
+      WHERE  kind = 'FINISH'
+      ${branchId === null ? sql`` : sql`AND branch_id = ${branchId}`}
+      GROUP  BY pid
+    )
+    SELECT p.id AS pid, p.name,
+           COALESCE(m.closing, 0)::text AS closing,
+           m.last_moved::text AS lastMoved
+    FROM   product p
+    LEFT   JOIN moves m ON m.pid = p.id
+    WHERE  p.is_active
+      AND  COALESCE(m.closing, 0) > 0
+      AND  (m.last_moved IS NULL OR m.last_moved <= now() - (${days} || ' days')::interval)
+    ORDER  BY p.name
+  `.execute(db);
+
+  return { rows: rows.rows, count: rows.rows.length, days };
+}
+
+// ---------------------------------------------------------------------------
+// Aged receivables — what each credit customer owes, aged by cycle
+// ---------------------------------------------------------------------------
+
+export async function getAgedReceivables(
+  principal: Principal,
+  opts: { branchId?: number | undefined },
+) {
+  const branchId = scope(principal, opts.branchId);
+
+  const rows = await sql<{
+    id: number;
+    name: string | null;
+    cycle: string | null;
+    balance: string;
+    limit: string;
+  }>`
+    SELECT c.id, c.name, c.settlement_cycle AS cycle,
+           (COALESCE(SUM(t.dr), 0) - COALESCE(SUM(t.cr), 0))::text AS balance,
+           c.credit_limit::text AS limit
+    FROM   customer c
+    LEFT   JOIN transactions t ON t.account_id = c.account_id
+    WHERE  c.account_id IS NOT NULL
+      AND  c.account_id <> 1010201
+    ${branchId === null ? sql`` : sql`AND c.branch_id = ${branchId}`}
+    GROUP  BY c.id, c.name, c.settlement_cycle, c.credit_limit
+    HAVING (COALESCE(SUM(t.dr), 0) - COALESCE(SUM(t.cr), 0)) <> 0
+    ORDER  BY c.name
+  `.execute(db);
+
+  return { rows: rows.rows, count: rows.rows.length };
+}
+
+// ---------------------------------------------------------------------------
+// Income statement — with gross margin as its own line (501 vs 502 split)
+// ---------------------------------------------------------------------------
+
+export async function getIncomeStatementWithMargin(principal: Principal, opts: DateRange) {
+  const branchId = scope(principal, opts.branchId);
+
+  const [revenue, cogs, operating] = await Promise.all([
+    balancesByHead([4], { from: opts.from, to: opts.to, branchId, debitNormal: false }),
+    balancesBySubHead([8], { from: opts.from, to: opts.to, branchId, debitNormal: true }),
+    balancesBySubHead([9], { from: opts.from, to: opts.to, branchId, debitNormal: true }),
+  ]);
+
+  const totalRevenue = revenue.reduce((a, l) => add(a, l.amount), '0.00');
+  const totalCogs = cogs.reduce((a, l) => add(a, l.amount), '0.00');
+  const totalOperating = operating.reduce((a, l) => add(a, l.amount), '0.00');
+
+  return {
+    from: opts.from,
+    to: opts.to,
+    revenue,
+    totalRevenue,
+    cogs,
+    totalCogs,
+    grossMargin: sub(totalRevenue, totalCogs),
+    operating,
+    totalOperating,
+    netProfit: sub(sub(totalRevenue, totalCogs), totalOperating),
+  };
+}
+
+/** Account balances grouped by sub-head (8 = cost of sales, 9 = operating). */
+async function balancesBySubHead(
+  subHeads: readonly number[],
+  opts: { from?: string | undefined; to: string; branchId: number | null; debitNormal: boolean },
+): Promise<StatementLine[]> {
+  const rows = await sql<{ account_id: number; name: string | null; dr: string; cr: string }>`
+    SELECT a.account_id, a.name,
+           COALESCE(SUM(t.dr), 0)::text AS dr,
+           COALESCE(SUM(t.cr), 0)::text AS cr
+    FROM   account a
+    JOIN   transactions t ON t.account_id = a.account_id
+    WHERE  a.sub_head_id = ANY(${[...subHeads]})
+      AND  t.date <= ${opts.to}
+    ${opts.from === undefined ? sql`` : sql`AND t.date >= ${opts.from}`}
+    ${opts.branchId === null ? sql`` : sql`AND t.branch_id = ${opts.branchId}`}
+    GROUP  BY a.account_id, a.name
+    ORDER  BY a.account_id
+  `.execute(db);
+
+  return rows.rows
+    .map((r) => ({
+      accountId: r.account_id,
+      name: r.name ?? '',
+      amount: opts.debitNormal ? sub(r.dr, r.cr) : sub(r.cr, r.dr),
+    }))
+    .filter((l) => Number(l.amount) !== 0);
+}

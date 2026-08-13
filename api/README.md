@@ -55,9 +55,13 @@ a phased reshape in motion. Six phases have landed since:
 - **E-Store** (PLAN.md Phase 10) — the website's order ships from a branch at
   wholesale; stock leaves on record and the branch's dues fall on warehouse
   acceptance, with nothing landing in branch sales (migration `1700000000026`).
+- **Reports and Excel** (PLAN.md Phase 11) — every report exports to Excel with
+  the filter applied (summary block, coloured headers); new low-stock, dead-stock
+  (no movement in 90 days) and aged-receivables reports; and the income statement
+  shows gross margin from the 501/502 split.
 
-The rest of PLAN.md's phases (11 onward — reports, dashboards, opening
-balances) have not started. Treat the table below as
+The rest of PLAN.md's phases (12 onward — dashboards, opening balances) have
+not started. Treat the table below as
 "what the original port covered," not "what PLAN.md considers done."
 
 | Area | State |

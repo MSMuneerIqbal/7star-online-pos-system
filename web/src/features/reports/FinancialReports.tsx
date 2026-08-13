@@ -158,9 +158,12 @@ interface IncomeStatement {
   from: string;
   to: string;
   revenue: StatementLine[];
-  expenses: StatementLine[];
+  cogs: StatementLine[];
+  operating: StatementLine[];
   totalRevenue: string;
-  totalExpenses: string;
+  totalCogs: string;
+  grossMargin: string;
+  totalOperating: string;
   netProfit: string;
 }
 
@@ -182,7 +185,7 @@ export function IncomeStatementPage() {
   return (
     <ReportShell
       title="Income Statement"
-      subtitle="Revenue and expenses over a period"
+      subtitle="Revenue, gross margin and expenses over a period"
       filter="range"
       loading={isFetching}
       error={error ? (error as Error).message : null}
@@ -191,7 +194,7 @@ export function IncomeStatementPage() {
       {data && (
         <ReportTable
           headers={[{ label: 'Account' }, { label: 'Amount', numeric: true, width: '12rem' }]}
-          isEmpty={data.revenue.length === 0 && data.expenses.length === 0}
+          isEmpty={data.revenue.length === 0 && data.cogs.length === 0 && data.operating.length === 0}
           empty="No revenue or expenses in this period"
         >
           <Section title="Revenue" lines={data.revenue} />
@@ -200,10 +203,16 @@ export function IncomeStatementPage() {
             <td className="px-2 py-1 text-right tabular">{fmtMoney(data.totalRevenue)}</td>
           </tr>
 
-          <Section title="Expenses" lines={data.expenses} />
+          <Section title="Cost of goods sold" lines={data.cogs} />
           <tr className="border-b border-slate-200 font-medium">
-            <td className="px-2 py-1">Total expenses</td>
-            <td className="px-2 py-1 text-right tabular">{fmtMoney(data.totalExpenses)}</td>
+            <td className="px-2 py-1">Gross margin</td>
+            <td className="px-2 py-1 text-right tabular font-semibold">{fmtMoney(data.grossMargin)}</td>
+          </tr>
+
+          <Section title="Operating expenses" lines={data.operating} />
+          <tr className="border-b border-slate-200 font-medium">
+            <td className="px-2 py-1">Total operating expenses</td>
+            <td className="px-2 py-1 text-right tabular">{fmtMoney(data.totalOperating)}</td>
           </tr>
 
           <tr className="border-t-2 border-slate-300 bg-slate-50 text-base font-semibold">
