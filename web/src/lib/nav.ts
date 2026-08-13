@@ -160,6 +160,7 @@ export const NAV: readonly NavSection[] = [
       },
       { label: 'Sale Report', path: '/reports/sales', action: [35, 6051], status: 'ported' },
       { label: 'Purchase Report', path: '/reports/purchases', action: [36, 6061], status: 'ported' },
+      { label: 'Customer Statement', path: '/customers/statement', formId: 7, status: 'ported' },
     ],
   },
 

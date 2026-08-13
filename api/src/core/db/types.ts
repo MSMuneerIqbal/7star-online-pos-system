@@ -422,6 +422,10 @@ export interface CustomerTable {
   branch_id: number;
   /** Receivable account code in the chart of accounts. */
   account_id: number;
+  /** WEEKLY | MONTHLY — the settlement cycle that drives the aging buckets. */
+  settlement_cycle: string | null;
+  /** Optional cap on how much this customer may owe at once. */
+  credit_limit: Defaulted<Numeric>;
   created_at: CreatedAt;
   updated_at: CreatedAt;
   created_by: number;
@@ -435,6 +439,21 @@ export interface SaleCustomerTable {
   phone: string | null;
   address: string | null;
   branch_id: number;
+}
+
+/** A customer paid before the bill — applied against the next credit sale. */
+export interface CustomerAdvanceTable {
+  id: Generated<number>;
+  customer_id: number;
+  branch_id: number;
+  date: ColumnType<string, string, string>;
+  amount: Numeric;
+  method: Defaulted<string>;
+  note: string | null;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
 }
 
 /** Single-row company profile. Supplies the header on every printed document. */
@@ -568,6 +587,8 @@ export interface SaleDetailTable {
   sale_id: number;
   pid: number;
   pname: string | null;
+  /** PRODUCT (stock) or SERVICE (charge line — revenue, no stock movement). */
+  line_type: Defaulted<string>;
   price: Numeric;
   qty: Numeric;
   total: Numeric;
@@ -1038,6 +1059,7 @@ export interface Database {
   product: ProductTable;
   branch_product: BranchProductTable;
   customer: CustomerTable;
+  customer_advance: CustomerAdvanceTable;
   sale_customer: SaleCustomerTable;
   sale: SaleTable;
   sale_detail: SaleDetailTable;

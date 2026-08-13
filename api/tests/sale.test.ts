@@ -1,9 +1,10 @@
 /**
  * Sale service tests, against real Postgres.
  *
- * Covers what the pure posting tests cannot: totals derived from the product
- * table, the full create path writing header + lines + a balanced ledger in one
- * transaction, and the edit path reversing rather than deleting.
+ * Covers what the pure posting tests cannot: totals derived from branch_product
+ * (wholesale cost + minimum price), the full create path writing header + lines
+ * + a balanced ledger in one transaction, and the edit path reversing rather
+ * than deleting.
  *
  * Everything runs inside a rolled-back transaction — nothing is committed.
  */
@@ -28,13 +29,11 @@ const ACCOUNTS = [
   CUSTOMER_ACC,
 ];
 
-/** Two products with known cost prices, so COGS is predictable. */
+/** Two products with known wholesale cost and on-hand stock, so COGS and the
+ * stock check are predictable. */
 async function seedCatalog(tx: Tx): Promise<{ battery: number; charger: number; custId: number }> {
   await seedLedgerFixtures(tx, { branchId: BRANCH, accountIds: ACCOUNTS });
 
-  // computeTotals only reads product.price (company cost) — sale price is a
-  // branch_product concern the caller supplies per line, same as the route
-  // does today.
   const battery = await tx
     .insertInto('product')
     .values({ name: 'Battery 12V', price: '4000.00' })
@@ -46,6 +45,39 @@ async function seedCatalog(tx: Tx): Promise<{ battery: number; charger: number; 
     .values({ name: 'Charger', price: '900.00' })
     .returning('id')
     .executeTakeFirstOrThrow();
+
+  const worker = await tx
+    .insertInto('worker')
+    .values({ name: 'Test Worker' })
+    .returning('id')
+    .executeTakeFirstOrThrow();
+
+  // On-hand stock and wholesale cost. COGS now reads branch_product.wholesale_cost.
+  const catalog: Array<[number, string]> = [
+    [battery.id, '4000.00'],
+    [charger.id, '900.00'],
+  ];
+  for (const [pid, cost] of catalog) {
+    await tx
+      .updateTable('branch_product')
+      .set({ wholesale_cost: cost })
+      .where('branch_id', '=', BRANCH)
+      .where('product_id', '=', pid)
+      .execute();
+    await tx
+      .insertInto('production_output')
+      .values({
+        date: '2026-01-01',
+        worker_id: worker.id,
+        product_id: pid,
+        branch_id: BRANCH,
+        qty: '100',
+        per_unit: cost,
+        total_cost: '100000.00',
+        grade: 'NEW',
+      })
+      .execute();
+  }
 
   const customer = await tx
     .insertInto('customer')
@@ -61,7 +93,7 @@ afterAll(async () => {
 });
 
 describe('computeTotals', () => {
-  it('prices lines from the request but costs them from the product table', async () => {
+  it('prices lines from the request but costs them from branch wholesale cost', async () => {
     const result = await inRollback(async (tx) => {
       const { battery, custId } = await seedCatalog(tx);
 
@@ -74,13 +106,14 @@ describe('computeTotals', () => {
           received: '0',
           lines: [{ pid: battery, qty: '2', price: '5500.00', discount: '0' }],
         },
+        BRANCH,
         tx,
       );
     });
 
     expect(result.grossTotal).toBe('11000.00');
     expect(result.netTotal).toBe('11000.00');
-    // Cost is 4000 from the DB, NOT anything the client could send.
+    // Cost is the branch's wholesale cost (4000), NOT anything the client sends.
     expect(result.cogs).toBe('8000.00');
     expect(result.lines[0]!.pname).toBe('Battery 12V');
   });
@@ -93,7 +126,7 @@ describe('computeTotals', () => {
         {
           date: '2026-03-01',
           custId,
-          discount: '100.00', // invoice level
+          discount: '100.00',
           service: '50.00',
           received: '0',
           lines: [
@@ -101,14 +134,14 @@ describe('computeTotals', () => {
             { pid: charger, qty: '2', price: '1200.00', discount: '50.00' },
           ],
         },
+        BRANCH,
         tx,
       );
     });
 
-    expect(result.grossTotal).toBe('7900.00'); // 5500 + 2400
+    expect(result.grossTotal).toBe('7900.00');
     expect(result.lineDiscount).toBe('250.00');
-    expect(result.totalDiscount).toBe('350.00'); // 250 + 100
-    // gross + service - discount
+    expect(result.totalDiscount).toBe('350.00');
     expect(result.netTotal).toBe('7600.00');
     expect(result.cogs).toBe('5800.00'); // 4000 + 1800
     expect(result.remaining).toBe('7600.00');
@@ -127,6 +160,7 @@ describe('computeTotals', () => {
           received: '4000.00',
           lines: [{ pid: battery, qty: '1', price: '5500.00', discount: '0' }],
         },
+        BRANCH,
         tx,
       );
     });
@@ -135,12 +169,38 @@ describe('computeTotals', () => {
     expect(result.remaining).toBe('1500.00');
   });
 
+  it('accepts a free-text service line with no stock and no COGS', async () => {
+    const result = await inRollback(async (tx) => {
+      const { custId } = await seedCatalog(tx);
+
+      return computeTotals(
+        {
+          date: '2026-03-01',
+          custId,
+          discount: '0',
+          service: '0',
+          received: '0',
+          lines: [
+            { lineType: 'SERVICE', pid: 0, pname: 'Fitting', qty: '1', price: '500.00', discount: '0' },
+          ],
+        },
+        BRANCH,
+        tx,
+      );
+    });
+
+    expect(result.grossTotal).toBe('500.00');
+    expect(result.cogs).toBe('0.00');
+    expect(result.lines[0]!.pname).toBe('Fitting');
+  });
+
   it('rejects an empty invoice', async () => {
     await expect(
       inRollback(async (tx) => {
         const { custId } = await seedCatalog(tx);
         return computeTotals(
           { date: '2026-03-01', custId, discount: '0', service: '0', received: '0', lines: [] },
+          BRANCH,
           tx,
         );
       }),
@@ -160,6 +220,7 @@ describe('computeTotals', () => {
             received: '0',
             lines: [{ pid: 999_999, qty: '1', price: '10.00', discount: '0' }],
           },
+          BRANCH,
           tx,
         );
       }),
@@ -179,10 +240,57 @@ describe('computeTotals', () => {
             received: '0',
             lines: [{ pid: battery, qty: '0', price: '10.00', discount: '0' }],
           },
+          BRANCH,
           tx,
         );
       }),
     ).rejects.toThrow(/greater than zero/i);
+  });
+
+  it('rejects a price below the branch minimum', async () => {
+    await expect(
+      inRollback(async (tx) => {
+        const { battery, custId } = await seedCatalog(tx);
+        await tx
+          .updateTable('branch_product')
+          .set({ minimum_price: '5000.00' })
+          .where('branch_id', '=', BRANCH)
+          .where('product_id', '=', battery)
+          .execute();
+        return computeTotals(
+          {
+            date: '2026-03-01',
+            custId,
+            discount: '0',
+            service: '0',
+            received: '0',
+            lines: [{ pid: battery, qty: '1', price: '4000.00', discount: '0' }],
+          },
+          BRANCH,
+          tx,
+        );
+      }),
+    ).rejects.toThrow(/below the minimum price/i);
+  });
+
+  it('rejects a quantity above the branch stock', async () => {
+    await expect(
+      inRollback(async (tx) => {
+        const { battery, custId } = await seedCatalog(tx);
+        return computeTotals(
+          {
+            date: '2026-03-01',
+            custId,
+            discount: '0',
+            service: '0',
+            received: '0',
+            lines: [{ pid: battery, qty: '101', price: '5500.00', discount: '0' }],
+          },
+          BRANCH,
+          tx,
+        );
+      }),
+    ).rejects.toThrow(/in stock/i);
   });
 
   it('rejects a line discount larger than the line', async () => {
@@ -198,6 +306,7 @@ describe('computeTotals', () => {
             received: '0',
             lines: [{ pid: battery, qty: '1', price: '100.00', discount: '150.00' }],
           },
+          BRANCH,
           tx,
         );
       }),
@@ -217,6 +326,7 @@ describe('computeTotals', () => {
             received: '0',
             lines: [{ pid: battery, qty: '1', price: '100.00', discount: '0' }],
           },
+          BRANCH,
           tx,
         );
       }),
@@ -236,6 +346,7 @@ describe('computeTotals', () => {
             received: '99999.00',
             lines: [{ pid: battery, qty: '1', price: '100.00', discount: '0' }],
           },
+          BRANCH,
           tx,
         );
       }),
@@ -255,11 +366,11 @@ describe('computeTotals', () => {
           received: '0',
           lines: [{ pid: charger, qty: '2.5', price: '1499.99', discount: '0' }],
         },
+        BRANCH,
         tx,
       );
     });
 
-    // 2.5 x 1499.99 = 3749.975 -> half-up at 2dp
     expect(result.grossTotal).toBe('3749.98');
     expect(result.cogs).toBe('2250.00'); // 2.5 x 900
   });
@@ -270,8 +381,6 @@ describe('sale posting integration', () => {
     const { sale, lines, ledger } = await inRollback(async (tx) => {
       const { battery, charger, custId } = await seedCatalog(tx);
 
-      // createSale opens its own transaction, so drive the same steps here
-      // against the rolled-back one.
       const t = await computeTotals(
         {
           date: '2026-03-01',
@@ -284,6 +393,7 @@ describe('sale posting integration', () => {
             { pid: charger, qty: '2', price: '1200.00', discount: '0' },
           ],
         },
+        BRANCH,
         tx,
       );
 
@@ -313,6 +423,7 @@ describe('sale posting integration', () => {
             sale_id: inserted.id,
             pid: l.pid,
             pname: l.pname,
+            line_type: l.lineType,
             price: l.price,
             qty: l.qty,
             total: l.total,
@@ -353,39 +464,23 @@ describe('sale posting integration', () => {
           .selectAll()
           .where('sale_id', '=', inserted.id)
           .execute(),
-        // Scope by trans_id, NOT inv_id: document ids are per-table, so a sale
-        // and a purchase can share one.
         ledger: await tx
           .selectFrom('transactions')
           .selectAll()
-          .where(
-            'trans_id',
-            'in',
-            posted.map((p) => p.transId),
-          )
+          .where('trans_id', 'in', posted.map((p) => p.transId))
           .execute(),
       };
     });
 
-    // gross 7900 (5500 + 2400) + service 50 - discount 300 (200 line + 100
-    // invoice) = 7650; received 2000 leaves 5650.
     expect(sale.gross_total).toBe('7900.00');
     expect(sale.discount).toBe('300.00');
     expect(sale.net_total).toBe('7650.00');
     expect(sale.remaining).toBe('5650.00');
     expect(lines).toHaveLength(2);
 
-    // The whole document balances — the legacy version would be off by
-    // (discount - service) = 300 - 50 = 250.00.
     const legs = ledger.map((r) => ({ accountId: r.account_id, dr: r.dr, cr: r.cr, detail: '' }));
     expect(journalTotals(legs).imbalance).toBe('0.00');
-
-    // Two vouchers: the invoice and the cash receipt.
     expect(new Set(ledger.map((r) => r.vtype))).toEqual(new Set(['SINV', 'CRV']));
-
-    // Sales credited at gross, not net.
-    expect(ledger.find((r) => r.account_id === ACC.SALES && r.vtype === 'SINV')?.cr).toBe(
-      '7900.00',
-    );
+    expect(ledger.find((r) => r.account_id === ACC.SALES && r.vtype === 'SINV')?.cr).toBe('7900.00');
   });
 });

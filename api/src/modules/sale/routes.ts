@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { db } from '../../core/db/index.js';
 import { notFound } from '../../core/errors.js';
+import { resolveBranchId } from '../../core/rbac.js';
 import { formPermissions, likeTerm, listQuery, offset, paged } from '../../core/crud.js';
 import { WALK_IN_CUSTOMER_ID } from '../../accounting/accounts.js';
 import { loadPrintDocument } from '../print/service.js';
@@ -23,7 +24,9 @@ const decimalString = (label: string) =>
     .refine((v) => /^-?\d+(\.\d+)?$/.test(v), `${label} must be a number`);
 
 const lineSchema = z.object({
-  pid: z.coerce.number().int().positive(),
+  lineType: z.enum(['PRODUCT', 'SERVICE']).default('PRODUCT'),
+  pid: z.coerce.number().int().min(0),
+  pname: z.string().max(200).nullish(),
   qty: decimalString('Quantity'),
   price: decimalString('Price'),
   discount: decimalString('Discount').default('0'),
@@ -200,7 +203,8 @@ export default async function saleRoutes(app: FastifyInstance): Promise<void> {
     preHandler: app.requireAction(PERM.formId, PERM.view),
     handler: async (req) => {
       const body = saleBody.parse(req.body);
-      const totals = await service.computeTotals(body);
+      const branchId = resolveBranchId(req.principal, body.branchId);
+      const totals = await service.computeTotals(body, branchId);
 
       // COGS is internal margin data; it never leaves the server.
       const { cogs: _cogs, ...safe } = totals;

@@ -301,6 +301,15 @@ export const CUSTOMER: RegistrationConfig = {
     { name: 'city', label: 'City', half: true },
     { name: 'province', label: 'Province', half: true },
     { name: 'email', label: 'Email', half: true },
+    {
+      name: 'settlementCycle',
+      label: 'Settlement cycle',
+      kind: 'select',
+      optionsKey: 'settlementCycles',
+      half: true,
+      hint: 'Weekly or monthly — drives the aging buckets.',
+    },
+    { name: 'creditLimit', label: 'Credit limit', kind: 'money', half: true, default: '0' },
     { name: 'isActive', label: 'Active', kind: 'checkbox', default: true },
   ],
 };

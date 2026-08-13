@@ -617,6 +617,10 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
           { id: 'COMPLETE_SET', name: 'Complete Set' },
           { id: 'OTHER', name: 'Other part' },
         ],
+        settlementCycles: [
+          { id: 'WEEKLY', name: 'Weekly' },
+          { id: 'MONTHLY', name: 'Monthly' },
+        ],
         cellTypes: cellTypeRows,
       };
     },

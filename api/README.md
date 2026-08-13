@@ -39,8 +39,12 @@ a phased reshape in motion. Six phases have landed since:
   account per branch plus a warehouse "due from branches" account; dues rise
   on receipt at wholesale and fall on confirmed remittance; the branch dues
   report (migration `1700000000020`).
+- **Selling** (PLAN.md Phase 7) — COGS reads the branch's weighted-average
+  wholesale cost, price cannot drop below the branch minimum nor exceed stock,
+  free-text service lines, and credit customers gain settlement cycle, credit
+  limit, advances and a reconciling statement (migration `1700000000021`).
 
-The rest of PLAN.md's phases (7 onward — selling, warranty, E-Store, …)
+The rest of PLAN.md's phases (8 onward — lab, warranty, E-Store, …)
 have not started. Treat the table below as
 "what the original port covered," not "what PLAN.md considers done."
 
@@ -55,7 +59,7 @@ have not started. Treat the table below as
 | Audit log | Done |
 | Posting engine — rules | Done — 30 tests |
 | Posting engine — DB writer | Done — **14 tests against real Postgres** |
-| Migrations | **Applied** — through `1700000000020` on Neon |
+| Migrations | **Applied** — through `1700000000021` on Neon |
 | Permission tree | **Reconstructed from the legacy UI** — 150/150 ids verified |
 | Catalog split — master `product` + `branch_product` | Done — PLAN.md Phase 1 |
 | Branch module (form 2) | Done — full CRUD, verified in a browser |
@@ -75,7 +79,7 @@ have not started. Treat the table below as
 | All 8 registration screens | Done — party accounts minted atomically |
 | Legacy `.mdf` extract + ETL tooling | **Written, cannot run, not needed** — see "Starting fresh" below |
 
-`npm test` → 158 passing. `npm run typecheck` → clean.
+`npm test` → 161 passing. `npm run typecheck` → clean.
 
 ### Four accounting defects found and fixed
 

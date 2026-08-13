@@ -159,6 +159,8 @@ export default async function partyRoutes(app: FastifyInstance): Promise<void> {
           cnic: z.string().trim().max(50).nullish(),
           city: z.string().trim().max(100).nullish(),
           province: z.string().trim().max(100).nullish(),
+          settlementCycle: z.enum(['WEEKLY', 'MONTHLY']).nullish(),
+          creditLimit: z.union([z.string(), z.number()]).transform(String).default('0'),
           isActive: z.boolean().default(true),
           branchId: z.coerce.number().int().optional(),
         })
@@ -187,6 +189,8 @@ export default async function partyRoutes(app: FastifyInstance): Promise<void> {
             cnic: body.cnic ?? null,
             city: body.city ?? null,
             province: body.province ?? null,
+            settlement_cycle: body.settlementCycle ?? null,
+            credit_limit: body.creditLimit,
             is_active: body.isActive,
             branch_id: branchId,
             account_id: accountId,
@@ -229,6 +233,8 @@ export default async function partyRoutes(app: FastifyInstance): Promise<void> {
           cnic: z.string().trim().max(50).nullish(),
           city: z.string().trim().max(100).nullish(),
           province: z.string().trim().max(100).nullish(),
+          settlementCycle: z.enum(['WEEKLY', 'MONTHLY']).nullish(),
+          creditLimit: z.union([z.string(), z.number()]).transform(String).default('0'),
           isActive: z.boolean().default(true),
         })
         .parse(req.body);
@@ -254,6 +260,8 @@ export default async function partyRoutes(app: FastifyInstance): Promise<void> {
             cnic: body.cnic ?? null,
             city: body.city ?? null,
             province: body.province ?? null,
+            settlement_cycle: body.settlementCycle ?? null,
+            credit_limit: body.creditLimit,
             is_active: body.isActive,
             updated_at: new Date(),
             updated_by: req.principal.empId,

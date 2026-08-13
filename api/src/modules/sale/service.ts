@@ -12,6 +12,7 @@
  * numbers the browser sent, so a tampered or stale form wrote a wrong ledger.
  */
 import { db, withTransaction, type Tx } from '../../core/db/index.js';
+import { sql } from 'kysely';
 import { add, gt, money, mul, sub, type MoneyString } from '../../core/money.js';
 import { badRequest, notFound, unprocessable } from '../../core/errors.js';
 import { issueDocumentNumber } from '../../core/numbering.js';
@@ -23,7 +24,12 @@ import { postJournals, repostDocument } from '../../accounting/post.js';
 import { fmt } from '../../accounting/journal.js';
 
 export interface SaleLineInput {
+  /** PRODUCT (stock) or SERVICE (charge line — revenue, no stock movement). */
+  lineType?: 'PRODUCT' | 'SERVICE' | undefined;
+  /** 0 for service lines. */
   pid: number;
+  /** Free-text name for a service line. */
+  pname?: string | null | undefined;
   qty: string;
   price: string;
   discount: string;
@@ -55,11 +61,12 @@ export interface SaleInput {
 }
 
 export interface ComputedLine extends SaleLineInput {
+  lineType: 'PRODUCT' | 'SERVICE';
   pname: string;
   /** qty x price, before discount. */
   total: MoneyString;
   netTotal: MoneyString;
-  /** Product cost x qty — the COGS contribution. */
+  /** Cost of goods sold contribution — zero for service lines. */
   cost: MoneyString;
 }
 
@@ -76,33 +83,66 @@ export interface SaleTotals {
   remaining: MoneyString;
 }
 
+/** The branch's current on-hand quantity of a finished product. */
+async function branchStock(
+  executor: Tx | typeof db,
+  branchId: number,
+  pid: number,
+): Promise<string> {
+  const row = await sql<{ qty: string }>`
+    SELECT COALESCE(SUM(qty), 0)::text AS qty
+    FROM   stock_movement
+    WHERE  kind = 'FINISH' AND pid = ${pid} AND branch_id = ${branchId}
+  `.execute(executor);
+  return row.rows[0]?.qty ?? '0';
+}
+
 /**
  * Price and cost every line from the database, then derive the invoice totals.
  *
- * Selling price comes from the request (operators negotiate), but **cost** is
- * always read from the product table — COGS must never be client-supplied.
+ * Selling price comes from the request, but it cannot drop below the branch's
+ * minimum price, and it cannot exceed what the branch has on hand. COGS is the
+ * branch's weighted-average wholesale cost — always read, never client-supplied.
  */
 export async function computeTotals(
   input: SaleInput,
+  branchId: number,
   executor: Tx | typeof db = db,
 ): Promise<SaleTotals> {
   if (input.lines.length === 0) {
     throw badRequest('A sale needs at least one line item');
   }
 
-  const ids = [...new Set(input.lines.map((l) => l.pid))];
+  const productLines = input.lines.filter((l) => (l.lineType ?? 'PRODUCT') === 'PRODUCT');
+  const ids = [...new Set(productLines.map((l) => l.pid))];
 
-  const products = await executor
-    .selectFrom('product')
-    .select(['id', 'name', 'price'])
-    .where('id', 'in', ids)
-    .execute();
+  const [products, branchProducts] = await Promise.all([
+    ids.length > 0
+      ? executor.selectFrom('product').select(['id', 'name']).where('id', 'in', ids).execute()
+      : Promise.resolve([]),
+    ids.length > 0
+      ? executor
+          .selectFrom('branch_product')
+          .select(['product_id', 'wholesale_cost', 'minimum_price'])
+          .where('branch_id', '=', branchId)
+          .where('product_id', 'in', ids)
+          .execute()
+      : Promise.resolve([]),
+  ]);
 
   const byId = new Map(products.map((p) => [p.id, p]));
+  const bpById = new Map(branchProducts.map((bp) => [bp.product_id, bp]));
 
   const missing = ids.filter((id) => !byId.has(id));
   if (missing.length > 0) {
     throw badRequest(`Unknown product id(s): ${missing.join(', ')}`);
+  }
+
+  // Total quantity demanded per product, so one product across two lines is
+  // checked against stock once.
+  const demanded = new Map<number, string>();
+  for (const l of productLines) {
+    demanded.set(l.pid, add(demanded.get(l.pid) ?? '0', l.qty));
   }
 
   const lines: ComputedLine[] = [];
@@ -111,7 +151,7 @@ export async function computeTotals(
   let cogs = '0.00';
 
   for (const [i, line] of input.lines.entries()) {
-    const product = byId.get(line.pid)!;
+    const isService = (line.lineType ?? 'PRODUCT') === 'SERVICE';
 
     if (!gt(line.qty, '0.000')) {
       throw badRequest(`Line ${i + 1}: quantity must be greater than zero`);
@@ -121,21 +161,44 @@ export async function computeTotals(
     }
 
     const total = mul(line.qty, line.price);
-
     if (gt(line.discount, total)) {
       throw badRequest(
         `Line ${i + 1}: discount ${fmt(line.discount)} exceeds the line total ${fmt(total)}`,
       );
     }
 
-    const netTotal = sub(total, line.discount);
-    const cost = mul(line.qty, product.price);
+    let cost = '0.00';
+    let pname = line.pname ?? '';
+
+    if (!isService) {
+      const product = byId.get(line.pid)!;
+      const bp = bpById.get(line.pid);
+
+      // Price floor: a salesman cannot discount below the branch's minimum.
+      if (bp && Number(bp.minimum_price) > 0 && Number(line.price) < Number(bp.minimum_price)) {
+        throw badRequest(
+          `Line ${i + 1}: price ${fmt(line.price)} is below the minimum price ${fmt(bp.minimum_price)} for ${product.name}`,
+        );
+      }
+
+      // Stock: quantity cannot exceed what the branch holds.
+      const onHand = await branchStock(executor, branchId, line.pid);
+      if (gt(demanded.get(line.pid) ?? '0', onHand)) {
+        throw badRequest(
+          `Line ${i + 1}: only ${onHand} of ${product.name} in stock, ${demanded.get(line.pid)} requested`,
+        );
+      }
+
+      cost = mul(line.qty, bp?.wholesale_cost ?? '0');
+      pname = product.name ?? '';
+    }
 
     lines.push({
       ...line,
-      pname: product.name ?? '',
+      lineType: isService ? 'SERVICE' : 'PRODUCT',
+      pname,
       total,
-      netTotal,
+      netTotal: sub(total, line.discount),
       cost,
     });
 
@@ -248,8 +311,9 @@ async function writeLines(tx: Tx, saleId: number, lines: readonly ComputedLine[]
     .values(
       lines.map((l) => ({
         sale_id: saleId,
-        pid: l.pid,
+        pid: l.lineType === 'SERVICE' ? 0 : l.pid,
         pname: l.pname,
+        line_type: l.lineType,
         price: l.price,
         qty: l.qty,
         total: l.total,
@@ -297,7 +361,7 @@ export async function createSale(principal: Principal, input: SaleInput): Promis
   assertBranchAccess(principal, branchId);
 
   return withTransaction(async (tx) => {
-    const totals = await computeTotals(input, tx);
+    const totals = await computeTotals(input, branchId, tx);
     const customer = await resolveCustomer(input.custId, input.walkIn, tx);
 
     const saleCustId =
@@ -386,7 +450,7 @@ export async function updateSale(
   const branchId = resolveBranchId(principal, input.branchId ?? existing.branch_id);
 
   return withTransaction(async (tx) => {
-    const totals = await computeTotals(input, tx);
+    const totals = await computeTotals(input, branchId, tx);
     const customer = await resolveCustomer(input.custId, input.walkIn, tx);
 
     const saleCustId =
