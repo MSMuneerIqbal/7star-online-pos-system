@@ -74,7 +74,13 @@ describe('transfer out (despatch)', () => {
 });
 
 describe('transfer in (receipt)', () => {
-  const receipt = { ...base, value: '25000.00', freight: '1500.00', freightPaidInCash: true };
+  const receipt = {
+    ...base,
+    value: '25000.00',
+    receivedValue: '25000.00',
+    freight: '1500.00',
+    freightPaidInCash: true,
+  };
 
   it('balances — the legacy version posted two debits and no credit at all', () => {
     const journal = postTransferIn(receipt);
@@ -86,6 +92,15 @@ describe('transfer in (receipt)', () => {
 
     expect(journal.legs.find((l) => l.accountId === ACC.INVENTORY_RAW)?.dr).toBe('25000.00');
     expect(journal.legs.find((l) => l.accountId === ACC.INTER_BRANCH)?.cr).toBe('25000.00');
+  });
+
+  it('expenses the short/damaged value as stock loss, never as branch debt', () => {
+    const journal = postTransferIn({ ...receipt, receivedValue: '20000.00' });
+
+    expect(journal.legs.find((l) => l.accountId === ACC.INVENTORY_RAW)?.dr).toBe('20000.00');
+    expect(journal.legs.find((l) => l.accountId === ACC.STOCK_LOSS)?.dr).toBe('5000.00');
+    expect(journal.legs.find((l) => l.accountId === ACC.INTER_BRANCH)?.cr).toBe('25000.00');
+    expect(totals(journal.legs).imbalance).toBe('0.00');
   });
 
   it('expenses freight rather than capitalising it into stock', () => {
@@ -131,6 +146,7 @@ describe('the transfer pair, end to end', () => {
           ...base,
           invId: 2,
           value: '25000.00',
+          receivedValue: '25000.00',
           freight: '1500.00',
           freightPaidInCash: true,
         }),

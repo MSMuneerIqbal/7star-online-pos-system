@@ -16,7 +16,7 @@
  */
 import { ACC, VTYPE } from '../accounts.js';
 import { buildJournal, credit, debit, debitIf, creditIf, type Journal } from '../journal.js';
-import { gt, type MoneyString } from '../../core/money.js';
+import { gt, sub, type MoneyString } from '../../core/money.js';
 
 export type StockKind = 'RAW' | 'FINISH';
 
@@ -73,8 +73,14 @@ export interface TransferInInput {
   fromBranchName: string;
   toBranchName: string;
   kind: StockKind;
-  /** Value of the goods at cost, as despatched. */
+  /** Value of the goods as despatched, at production cost. */
   value: MoneyString;
+  /**
+   * Value of what actually arrived (received quantity), at production cost.
+   * Short and damaged units are the difference between `value` and this, and
+   * they are expensed as stock loss — never charged to the branch.
+   */
+  receivedValue: MoneyString;
   /** Cargo/freight paid on arrival. Expensed, not capitalised. */
   freight: MoneyString;
   /**
@@ -87,12 +93,14 @@ export interface TransferInInput {
 /**
  * Stock received at a branch.
  *
- *   Dr  inventory              value
- *       Cr  inter-branch clearing         value
+ *   Dr  inventory              received value
+ *   Dr  stock loss             short + damaged value   (if any)
+ *       Cr  inter-branch clearing         despatched value
  *   Dr  freight expense        freight     (if any)
  *       Cr  cash                           freight
  *
- * The legacy version posted both debits and no credits at all.
+ * The branch answers only for what arrived; the missing value is a company
+ * expense (PRINCIPLES §6 — shortages and transit damage never become a debt).
  */
 export function postTransferIn(input: TransferInInput): Journal {
   const ref =
@@ -101,13 +109,16 @@ export function postTransferIn(input: TransferInInput): Journal {
 
   const freightRef = `CARGO EXPENSE FOR ${ref}`;
 
+  const lossValue = sub(input.value, input.receivedValue);
+
   return buildJournal({
     vtype: VTYPE.DO_RECEIVED,
     date: input.date,
     invId: input.invId,
     branchId: input.toBranchId,
     legs: [
-      debit(inventoryAccount(input.kind), input.value, ref),
+      debit(inventoryAccount(input.kind), input.receivedValue, ref),
+      ...debitIf(ACC.STOCK_LOSS, lossValue, `Short/damaged in transit – ${ref}`),
       credit(ACC.INTER_BRANCH, input.value, `Cleared from ${input.fromBranchName} – ${ref}`),
 
       // Freight is a period expense of the receiving branch. It is deliberately

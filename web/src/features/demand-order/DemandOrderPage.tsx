@@ -68,6 +68,7 @@ interface RequestRow extends OrderRow {
 
 interface ReceivedRow {
   id: number;
+  doc_number?: string;
   do_req_id: number | null;
   date: string;
   from_branch: number;
@@ -107,7 +108,6 @@ const StatusChip = ({ status }: { status: string | null }) => (
  */
 export function DemandOrderPage({ kind }: { kind: StockKind }) {
   const { hasAction } = useAuth();
-  const queryClient = useQueryClient();
 
   const [tab, setTab] = useState<Tab>('orders');
   const [page, setPage] = useState(1);
@@ -131,17 +131,6 @@ export function DemandOrderPage({ kind }: { kind: StockKind }) {
     enabled: composing === null,
   });
 
-  const despatch = useMutation({
-    mutationFn: (row: RequestRow) =>
-      api.post(`/demand-orders/${kind}/requests/${row.id}/despatch`),
-    onSuccess: () => {
-      toast.success('Stock despatched — inventory moved to in-transit');
-      void queryClient.invalidateQueries({ queryKey: ['demand-orders', kind] });
-    },
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'Could not despatch'),
-  });
-
   const perms = PERMS[kind][tab];
 
   const orderColumns: readonly Column<OrderRow>[] = [
@@ -160,7 +149,7 @@ export function DemandOrderPage({ kind }: { kind: StockKind }) {
   ];
 
   const requestColumns: readonly Column<RequestRow>[] = [
-    { key: 'id', header: 'No.', numeric: true, width: '4.5rem' },
+    { key: 'doc_number', header: 'No.', width: '6rem' },
     { key: 'date', header: 'Date', width: '7.5rem' },
     { key: 'from_branch', header: 'From', cell: (r) => branchName(r.from_branch) },
     {
@@ -175,7 +164,7 @@ export function DemandOrderPage({ kind }: { kind: StockKind }) {
   ];
 
   const receivedColumns: readonly Column<ReceivedRow>[] = [
-    { key: 'id', header: 'No.', numeric: true, width: '4.5rem' },
+    { key: 'doc_number', header: 'No.', width: '6rem' },
     { key: 'date', header: 'Date', width: '7.5rem' },
     { key: 'from_branch', header: 'From', cell: (r) => branchName(r.from_branch) },
     { key: 'to_branch', header: 'To', cell: (r) => branchName(r.to_branch) },
@@ -271,16 +260,6 @@ export function DemandOrderPage({ kind }: { kind: StockKind }) {
             tab === 'requests' && hasAction(perms.formId, perms.edit)
               ? (row) => (
                   <div className="flex justify-end gap-1">
-                    {row.status === 'PENDING' && (
-                      <button
-                        type="button"
-                        title="Despatch — moves stock out of this branch"
-                        className="rounded-sm p-1.5 text-slate-500 hover:bg-indigo-50 hover:text-indigo-700"
-                        onClick={() => despatch.mutate(row)}
-                      >
-                        <Truck className="size-3.5" />
-                      </button>
-                    )}
                     {row.status === 'DESPATCHED' && (
                       <button
                         type="button"
@@ -332,6 +311,30 @@ function ReceiveDialog({
   const [freight, setFreight] = useState('0');
   const [paidInCash, setPaidInCash] = useState(true);
   const [receivedBy, setReceivedBy] = useState('');
+  const [lines, setLines] = useState<Array<{ pid: number; pname: string; qty: string; received: string; short: string; damaged: string }>>([]);
+
+  const detail = useQuery({
+    queryKey: ['demand-orders', kind, 'requests', request?.id],
+    queryFn: () => api.get<{ lines: Array<{ pid: number; pname: string | null; qty: string }> }>(`/demand-orders/${kind}/requests/${request?.id}`),
+    enabled: request !== null,
+  });
+
+  // Seed the received quantities once the despatched lines load.
+  const seedKey = detail.data?.lines.map((l) => `${l.pid}:${l.qty}`).join('|') ?? '';
+  const [seeded, setSeeded] = useState('');
+  if (request && detail.data && seeded !== seedKey) {
+    setSeeded(seedKey);
+    setLines(
+      detail.data.lines.map((l) => ({
+        pid: l.pid,
+        pname: l.pname ?? '',
+        qty: l.qty,
+        received: l.qty,
+        short: '0',
+        damaged: '0',
+      })),
+    );
+  }
 
   const receive = useMutation({
     mutationFn: () =>
@@ -341,6 +344,12 @@ function ReceiveDialog({
         freight,
         freightPaidInCash: paidInCash,
         receivedBy: receivedBy || null,
+        lines: lines.map((l) => ({
+          pid: l.pid,
+          receivedQty: l.received,
+          shortQty: l.short,
+          damagedQty: l.damaged,
+        })),
       }),
     onSuccess: () => {
       toast.success('Stock received');
@@ -348,14 +357,20 @@ function ReceiveDialog({
       onClose();
       setFreight('0');
       setReceivedBy('');
+      setLines([]);
+      setSeeded('');
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'Could not receive'),
   });
 
+  const update = (pid: number, patch: Partial<{ received: string; short: string; damaged: string }>) =>
+    setLines((ls) => ls.map((l) => (l.pid === pid ? { ...l, ...patch } : l)));
+
   return (
     <Modal
       open={request !== null}
-      title={`Receive transfer #${request?.id ?? ''}`}
+      title={`Receive dispatch ${request?.doc_number ?? `#${request?.id ?? ''}`}`}
+      size="lg"
       onClose={onClose}
       footer={
         <>
@@ -380,7 +395,62 @@ function ReceiveDialog({
             <strong className="tabular">{fmtMoney(request.gross)}</strong>.
           </p>
 
-          <div className="space-y-3">
+          <div className="overflow-x-auto rounded-md border border-slate-200">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase">
+                  <th className="px-2 py-2 text-left">Item</th>
+                  <th className="w-20 px-2 py-2 text-right">Sent</th>
+                  <th className="w-20 px-2 py-2 text-right">Received</th>
+                  <th className="w-20 px-2 py-2 text-right">Short</th>
+                  <th className="w-20 px-2 py-2 text-right">Damaged</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((l) => (
+                  <tr key={l.pid} className="border-b border-slate-100 last:border-0">
+                    <td className="px-2 py-1">{l.pname}</td>
+                    <td className="px-2 py-1 text-right text-slate-400 tabular">{l.qty}</td>
+                    <td className="px-2 py-1">
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        className="field-input py-1 text-right tabular"
+                        aria-label={`Received for ${l.pname}`}
+                        value={l.received}
+                        onChange={(e) => update(l.pid, { received: e.target.value })}
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        className="field-input py-1 text-right tabular"
+                        aria-label={`Short for ${l.pname}`}
+                        value={l.short}
+                        onChange={(e) => update(l.pid, { short: e.target.value })}
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        className="field-input py-1 text-right tabular"
+                        aria-label={`Damaged for ${l.pname}`}
+                        value={l.damaged}
+                        onChange={(e) => update(l.pid, { damaged: e.target.value })}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-3 space-y-3">
             <Field
               label="Freight / cargo"
               name="freight"
@@ -433,29 +503,55 @@ function TransferComposer({
   const [date, setDate] = useState(today());
   const [fromBranchId, setFromBranchId] = useState<number | null>(null);
   const [toBranchId, setToBranchId] = useState<number | null>(null);
+  const [doId, setDoId] = useState<number | null>(null);
   const [note, setNote] = useState('');
   const [lines, setLines] = useState<InvoiceLine[]>([emptyLine()]);
+
+  const orders = useQuery({
+    queryKey: ['demand-orders', kind, 'orders'],
+    queryFn: () => api.get<Paged<OrderRow>>(`/demand-orders/${kind}/orders?pageSize=200`),
+    enabled: mode === 'request',
+  });
+
+  const pendingOrders = (orders.data?.rows ?? []).filter((o) => o.status === 'PENDING');
 
   const validLines = lines.filter((l) => l.pid !== null && Number(l.qty) > 0);
 
   const errors: string[] = [];
   if (validLines.length === 0) errors.push('Add at least one item');
-  if (fromBranchId === null || toBranchId === null) errors.push('Choose both branches');
-  if (fromBranchId !== null && fromBranchId === toBranchId) {
-    errors.push('A branch cannot transfer stock to itself');
+  if (mode === 'order') {
+    if (fromBranchId === null || toBranchId === null) errors.push('Choose both branches');
+    if (fromBranchId !== null && fromBranchId === toBranchId) {
+      errors.push('A branch cannot transfer stock to itself');
+    }
+  } else if (doId === null) {
+    errors.push('Choose a demand order to dispatch');
   }
 
   const save = useMutation({
-    mutationFn: () =>
-      api.post<{ id: number }>(`/demand-orders/${kind}/${mode}s`, {
+    mutationFn: () => {
+      if (mode === 'request') {
+        return api.post<{ id: number }>(`/demand-orders/${kind}/requests`, {
+          date,
+          doId,
+          note: note || null,
+          lines: validLines.map((l) => ({
+            pid: l.pid,
+            qty: l.qty,
+            wholesalePrice: l.price || '0',
+          })),
+        });
+      }
+      return api.post<{ id: number }>(`/demand-orders/${kind}/orders`, {
         date,
         fromBranchId,
         toBranchId,
         note: note || null,
         lines: validLines.map((l) => ({ pid: l.pid, qty: l.qty })),
-      }),
+      });
+    },
     onSuccess: (result) => {
-      toast.success(`${mode === 'order' ? 'Order' : 'Transfer'} #${result.id} created`);
+      toast.success(`${mode === 'order' ? 'Order' : 'Dispatch'} #${result.id} created`);
       void queryClient.invalidateQueries({ queryKey: ['demand-orders', kind] });
       onDone();
     },
@@ -468,11 +564,11 @@ function TransferComposer({
   return (
     <>
       <PageHeader
-        title={mode === 'order' ? `New ${KIND_LABEL[kind]} Order` : `New ${KIND_LABEL[kind]} Transfer`}
+        title={mode === 'order' ? `New ${KIND_LABEL[kind]} Order` : `New ${KIND_LABEL[kind]} Dispatch`}
         subtitle={
           mode === 'order'
-            ? 'Ask another branch to send stock — no ledger impact'
-            : 'Commit to send stock — posts when despatched'
+            ? 'Ask the warehouse to send stock — no ledger impact'
+            : 'Approve and price a demand order — stock leaves the warehouse now'
         }
         actions={
           <>
@@ -503,55 +599,78 @@ function TransferComposer({
           onChange={(e) => setDate(e.target.value)}
         />
 
-        <div>
-          <label htmlFor="from" className="field-label">
-            From branch<span className="ml-0.5 text-red-500">*</span>
-          </label>
-          <select
-            id="from"
-            className="field-input"
-            value={fromBranchId ?? ''}
-            onChange={(e) => setFromBranchId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">Select…</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        {mode === 'order' ? (
+          <>
+            <div>
+              <label htmlFor="from" className="field-label">
+                From branch<span className="ml-0.5 text-red-500">*</span>
+              </label>
+              <select
+                id="from"
+                className="field-input"
+                value={fromBranchId ?? ''}
+                onChange={(e) => setFromBranchId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">Select…</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <div>
-          <label htmlFor="to" className="field-label">
-            To branch<span className="ml-0.5 text-red-500">*</span>
-          </label>
-          <select
-            id="to"
-            className="field-input"
-            value={toBranchId ?? ''}
-            onChange={(e) => setToBranchId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">Select…</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-        </div>
+            <div>
+              <label htmlFor="to" className="field-label">
+                To branch<span className="ml-0.5 text-red-500">*</span>
+              </label>
+              <select
+                id="to"
+                className="field-input"
+                value={toBranchId ?? ''}
+                onChange={(e) => setToBranchId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">Select…</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
+        ) : (
+          <div className="sm:col-span-2">
+            <label htmlFor="do" className="field-label">
+              Demand order<span className="ml-0.5 text-red-500">*</span>
+            </label>
+            <select
+              id="do"
+              className="field-input"
+              value={doId ?? ''}
+              onChange={(e) => setDoId(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">Select a pending order…</option>
+              {pendingOrders.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.doc_number ?? `#${o.id}`} — {o.date}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <Field label="Note" name="note" value={note} onChange={(e) => setNote(e.target.value)} />
       </div>
 
-      {/* Quantities only — a transfer is always valued at cost, server-side. */}
       <div className="card overflow-x-auto">
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase">
               <th className="w-8 px-2 py-2 text-left">#</th>
               <th className="px-2 py-2 text-left">Item</th>
-              <th className="w-32 px-2 py-2 text-right">Qty</th>
+              <th className="w-28 px-2 py-2 text-right">Qty</th>
+              {mode === 'request' && <th className="w-32 px-2 py-2 text-right">Wholesale</th>}
               <th className="w-10 px-2 py-2" />
             </tr>
           </thead>
@@ -589,6 +708,19 @@ function TransferComposer({
                     onChange={(e) => update(line.key, { qty: e.target.value })}
                   />
                 </td>
+                {mode === 'request' && (
+                  <td className="px-2 py-1">
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      className="field-input py-1 text-right tabular"
+                      aria-label={`Wholesale price for line ${i + 1}`}
+                      value={line.price}
+                      onChange={(e) => update(line.key, { price: e.target.value })}
+                    />
+                  </td>
+                )}
                 <td className="px-2 py-1 text-right">
                   <button
                     type="button"

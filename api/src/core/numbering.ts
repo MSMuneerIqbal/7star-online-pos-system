@@ -23,6 +23,8 @@ export type DocType =
   | 'HOLD_SALE'
   | 'PRODUCTION'
   | 'DEMAND_ORDER'
+  | 'DISPATCH'
+  | 'RECEIPT'
   | 'LAB'
   | 'LAB_RECEIVED';
 
@@ -35,6 +37,8 @@ const DOC_CODE: Record<DocType, string | null> = {
   HOLD_SALE: 'H',
   PRODUCTION: 'PRD',
   DEMAND_ORDER: 'DO',
+  DISPATCH: 'DP',
+  RECEIPT: 'RC',
   LAB: 'LB',
   LAB_RECEIVED: 'LR',
 };

@@ -1,31 +1,31 @@
 /**
- * Demand order / inter-branch transfer.
+ * Demand order / inter-branch transfer — Phase 5 reshape.
  *
- * ONE module replacing ten legacy controllers. The raw and finished chains were
- * near-identical copies differing only in which stock kind they moved and which
- * catalog they read:
- *
- *   raw:    DemandOrder 17, DemandOrderRequest 18, BranchTransfer 39,
- *           DemandOrderReceiving 19, DoReceived 41
- *   finish: DoFinish 20, DoFinishRequest 21, BranchTransferFinish 40,
- *           DoFinishReceiving 22, DoFinishReceived 49
- *
- * The workflow is a four-stage chain over three table pairs:
+ * The three-step handshake (SPECS §6):
  *
  *   ORDER      demand_order   a branch asks head office for stock
- *   REQUEST    do_request     the supplying branch commits to send it
- *   DESPATCH   do_request     goods leave        → posts BTINV
- *   RECEIVE    do_received    goods arrive       → posts DORINV
+ *   DISPATCH   do_request     the WAREHOUSE approves (less than asked), sets the
+ *                             wholesale price and grade per line, and stock
+ *                             leaves ready stock   → posts BTINV
+ *   RECEIPT    do_received    the branch confirms what arrived — received, short
+ *                             and damaged per line   → posts DORINV
  *
- * Only the last two touch the ledger. An order or a request is a promise, not a
- * movement, so nothing is posted until stock actually moves.
+ * Every dispatched line carries TWO prices: wholesale (the branch's charge,
+ * which it sees) and production cost (the warehouse's true cost, which a branch
+ * never sees). Debt arises on confirmed receipt, at wholesale value; short and
+ * damaged units are expensed as stock loss and never become the branch's debt
+ * (PRINCIPLES §17.6, decided in Phase 5).
+ *
+ * On receipt, `branch_product.wholesale_cost` is recalculated as a weighted
+ * average (PRINCIPLES §17.9). Branch-to-branch transfer is refused — only the
+ * warehouse dispatches.
  */
 import { db, withTransaction, type Tx } from '../../core/db/index.js';
-import { add, gt, money, mul, type MoneyString } from '../../core/money.js';
+import { add, dec, money, mul, qty, sub, type MoneyString } from '../../core/money.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
-import { issueDocumentNumber } from '../../core/numbering.js';
 import { writeAudit } from '../../core/audit.js';
 import { assertBranchAccess, type Principal } from '../../core/rbac.js';
+import { issueDocumentNumber } from '../../core/numbering.js';
 import { VTYPE } from '../../accounting/accounts.js';
 import { postTransferIn, postTransferOut, type StockKind } from '../../accounting/rules/transfer.js';
 import { postJournal, repostDocument } from '../../accounting/post.js';
@@ -78,10 +78,8 @@ export interface PricedLine extends LineInput {
 }
 
 /**
- * Price lines at COST from the catalog.
- *
- * A transfer is an internal movement, so it is always valued at cost —
- * a branch cannot mark up stock it sends to another branch.
+ * Price lines at COST from the catalog. A transfer is an internal movement, so
+ * it is always valued at cost — a branch cannot mark up stock it sends.
  */
 export async function priceLines(
   tx: Tx,
@@ -108,7 +106,7 @@ export async function priceLines(
   let total = '0.00';
 
   for (const [i, line] of lines.entries()) {
-    if (!gt(line.qty, '0.000')) {
+    if (!gtQty(line.qty)) {
       throw badRequest(`Line ${i + 1}: quantity must be greater than zero`);
     }
 
@@ -123,8 +121,12 @@ export async function priceLines(
   return { lines: priced, total };
 }
 
+function gtQty(q: string): boolean {
+  return dec(q).gt(0);
+}
+
 // ---------------------------------------------------------------------------
-// Stage 1 — the order
+// Stage 1 — the order (a branch asks)
 // ---------------------------------------------------------------------------
 
 export interface OrderInput {
@@ -206,43 +208,88 @@ export async function createOrder(
 }
 
 // ---------------------------------------------------------------------------
-// Stage 2 — the request (supplying branch commits)
+// Stage 2 — dispatch. The warehouse approves, prices, and stock leaves.
 // ---------------------------------------------------------------------------
 
-export interface RequestInput {
-  date: string;
-  kind: StockKind;
-  /** The order being fulfilled, when there is one. */
-  doId?: number | null | undefined;
-  fromBranchId: number;
-  toBranchId: number;
-  note?: string | null | undefined;
-  lines: LineInput[];
+export interface DispatchLine {
+  pid: number;
+  /** Quantity actually approved — never more than asked. */
+  qty: string;
+  /** The branch's charge per unit. */
+  wholesalePrice: string;
+  /** NEW or REPAIRED — travels with the unit. */
+  grade?: 'NEW' | 'REPAIRED' | undefined;
 }
 
-export async function createRequest(
+export interface DispatchInput {
+  date: string;
+  kind: StockKind;
+  /** The demand order being fulfilled. */
+  doId: number;
+  note?: string | null | undefined;
+  lines: DispatchLine[];
+}
+
+export async function dispatchOrder(
   principal: Principal,
-  input: RequestInput,
-): Promise<{ id: number }> {
-  if (input.fromBranchId === input.toBranchId) {
-    throw badRequest('A branch cannot transfer stock to itself');
+  input: DispatchInput,
+): Promise<{ id: number; transId: number }> {
+  const order = await db
+    .selectFrom('demand_order')
+    .selectAll()
+    .where('id', '=', input.doId)
+    .executeTakeFirst();
+
+  if (!order) throw notFound('Demand order');
+  assertBranchAccess(principal, order.from_branch);
+
+  // Only the warehouse dispatches — branch-to-branch is refused (PRINCIPLES §17.15).
+  const supplier = await db
+    .selectFrom('branch')
+    .select(['id', 'type'])
+    .where('id', '=', order.from_branch)
+    .executeTakeFirst();
+  if (!supplier || supplier.type !== 'WAREHOUSE') {
+    throw badRequest('Only the warehouse can dispatch stock');
   }
 
-  // The supplying branch raises the request.
-  assertBranchAccess(principal, input.fromBranchId);
+  if (order.status !== STATUS.PENDING) {
+    throw conflict(`This order is ${order.status?.toLowerCase()} and cannot be dispatched`);
+  }
+
+  const kind = (order.type ?? input.kind) as StockKind;
 
   return withTransaction(async (tx) => {
-    const { lines, total } = await priceLines(tx, input.kind, input.lines);
+    const { lines, total } = await priceLines(tx, kind, input.lines);
+
+    // Approve less, never more, than the branch asked.
+    const ordered = await tx
+      .selectFrom('demand_order_detail')
+      .select(['pid', 'qty'])
+      .where('inv_id', '=', order.id)
+      .execute();
+
+    const orderedByPid = new Map(ordered.map((o) => [o.pid, dec(o.qty)]));
+    for (const line of lines) {
+      const asked = orderedByPid.get(line.pid);
+      if (!asked) throw badRequest(`Item ${line.pid} was not in the demand order`);
+      if (dec(line.qty).gt(asked)) {
+        throw badRequest(`Dispatch of ${line.qty} exceeds the ${asked} asked for item ${line.pid}`);
+      }
+    }
+
+    const { docNumber } = await issueDocumentNumber(tx, order.from_branch, 'DISPATCH');
 
     const request = await tx
       .insertInto('do_request')
       .values({
-        do_id: input.doId ?? null,
+        do_id: order.id,
+        doc_number: docNumber,
         date: input.date,
-        from_branch: input.fromBranchId,
-        to_branch: input.toBranchId,
-        type: input.kind,
-        status: STATUS.PENDING,
+        from_branch: order.from_branch,
+        to_branch: order.to_branch,
+        type: kind,
+        status: STATUS.DESPATCHED,
         is_req: true,
         note: input.note ?? null,
         gross: total,
@@ -252,100 +299,51 @@ export async function createRequest(
       .returning('id')
       .executeTakeFirstOrThrow();
 
+    const wholesaleByPid = new Map(input.lines.map((l) => [l.pid, l]));
+
     await tx
       .insertInto('do_request_detail')
       .values(
-        lines.map((l) => ({
-          inv_id: request.id,
-          pid: l.pid,
-          pname: l.pname,
-          qty: l.qty,
-          inv_qty: '0',
-          price: l.price,
-          total: l.total,
-          status: STATUS.PENDING,
-        })),
+        lines.map((l) => {
+          const w = wholesaleByPid.get(l.pid)!;
+          return {
+            inv_id: request.id,
+            pid: l.pid,
+            pname: l.pname,
+            qty: l.qty,
+            inv_qty: '0',
+            wholesale_price: money(w.wholesalePrice),
+            production_cost: l.price,
+            grade: w.grade ?? 'NEW',
+            price: l.price,
+            total: l.total,
+            status: STATUS.DESPATCHED,
+          };
+        }),
       )
       .execute();
 
-    if (input.doId) {
-      await tx
-        .updateTable('demand_order')
-        .set({ status: STATUS.APPROVED, updated_at: new Date() })
-        .where('id', '=', input.doId)
-        .execute();
-    }
+    const branches = await branchNames(tx, [order.from_branch, order.to_branch]);
 
-    await writeAudit(
-      principal,
-      {
-        form: DO_FORMS.REQUEST[input.kind].label,
-        action: 'New',
-        detail:
-          `REQ:${request.id} | New ${input.kind} transfer request | ` +
-          `From branch ${input.fromBranchId} to ${input.toBranchId} | Value ${fmt(total)}`,
-        invId: request.id,
-      },
-      tx,
-    );
-
-    return { id: request.id };
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Stage 3 — despatch. FIRST ledger impact.
-// ---------------------------------------------------------------------------
-
-export async function despatchRequest(
-  principal: Principal,
-  requestId: number,
-): Promise<{ id: number; transId: number }> {
-  const request = await db
-    .selectFrom('do_request')
-    .selectAll()
-    .where('id', '=', requestId)
-    .executeTakeFirst();
-
-  if (!request) throw notFound('Transfer request');
-  assertBranchAccess(principal, request.from_branch);
-
-  if (request.status === STATUS.DESPATCHED || request.status === STATUS.RECEIVED) {
-    throw conflict('This request has already been despatched');
-  }
-  if (request.status === STATUS.CANCELLED) {
-    throw conflict('This request was cancelled');
-  }
-
-  const kind = (request.type ?? 'RAW') as StockKind;
-
-  return withTransaction(async (tx) => {
-    const branches = await branchNames(tx, [request.from_branch, request.to_branch]);
-
+    // Stock leaves the warehouse at production cost.
     const posted = await postJournal(
       tx,
       postTransferOut({
-        invId: requestId,
-        date: request.date,
-        fromBranchId: request.from_branch,
-        toBranchId: request.to_branch,
-        fromBranchName: branches.get(request.from_branch) ?? '',
-        toBranchName: branches.get(request.to_branch) ?? '',
+        invId: request.id,
+        date: input.date,
+        fromBranchId: order.from_branch,
+        toBranchId: order.to_branch,
+        fromBranchName: branches.get(order.from_branch) ?? '',
+        toBranchName: branches.get(order.to_branch) ?? '',
         kind,
-        value: request.gross,
+        value: total,
       }),
     );
 
     await tx
-      .updateTable('do_request')
-      .set({ status: STATUS.DESPATCHED, updated_at: new Date(), updated_by: principal.empId })
-      .where('id', '=', requestId)
-      .execute();
-
-    await tx
-      .updateTable('do_request_detail')
-      .set({ status: STATUS.DESPATCHED })
-      .where('inv_id', '=', requestId)
+      .updateTable('demand_order')
+      .set({ status: STATUS.DESPATCHED, updated_at: new Date() })
+      .where('id', '=', order.id)
       .execute();
 
     await writeAudit(
@@ -354,21 +352,27 @@ export async function despatchRequest(
         form: DO_FORMS.REQUEST[kind].label,
         action: 'Approve',
         detail:
-          `REQ:${requestId} | Despatched ${kind} stock | ` +
-          `${branches.get(request.from_branch)} -> ${branches.get(request.to_branch)} | ` +
-          `Value ${fmt(request.gross)}`,
-        invId: requestId,
+          `${docNumber} | Dispatched ${kind} stock | ` +
+          `${branches.get(order.from_branch)} -> ${branches.get(order.to_branch)} | Value ${fmt(total)}`,
+        invId: request.id,
       },
       tx,
     );
 
-    return { id: requestId, transId: posted.transId };
+    return { id: request.id, transId: posted.transId };
   });
 }
 
 // ---------------------------------------------------------------------------
-// Stage 4 — receipt. SECOND ledger impact.
+// Stage 3 — receipt. The branch confirms what arrived.
 // ---------------------------------------------------------------------------
+
+export interface ReceiveLine {
+  pid: number;
+  receivedQty: string;
+  shortQty: string;
+  damagedQty: string;
+}
 
 export interface ReceiveInput {
   date: string;
@@ -378,7 +382,7 @@ export interface ReceiveInput {
   note?: string | null | undefined;
   receivedBy?: string | null | undefined;
   /** Omit to receive exactly what was despatched. */
-  lines?: LineInput[] | undefined;
+  lines?: ReceiveLine[] | undefined;
 }
 
 export async function receiveTransfer(
@@ -405,25 +409,69 @@ export async function receiveTransfer(
   const kind = (request.type ?? 'RAW') as StockKind;
 
   return withTransaction(async (tx) => {
-    // Default to the despatched lines — a short receipt is the exception.
-    const sourceLines =
-      input.lines ??
-      (
-        await tx
-          .selectFrom('do_request_detail')
-          .select(['pid', 'qty'])
-          .where('inv_id', '=', input.requestId)
-          .execute()
-      ).map((l) => ({ pid: l.pid, qty: l.qty }));
+    const despatched = await tx
+      .selectFrom('do_request_detail')
+      .select(['pid', 'pname', 'qty', 'production_cost', 'wholesale_price'])
+      .where('inv_id', '=', input.requestId)
+      .execute();
 
-    const { lines, total } = await priceLines(tx, kind, sourceLines);
+    // Default to receiving everything despatched.
+    const sourceLines: ReceiveLine[] =
+      input.lines ??
+      despatched.map((d) => ({
+        pid: d.pid,
+        receivedQty: d.qty,
+        shortQty: '0',
+        damagedQty: '0',
+      }));
+
+    // Every despatched line must be accounted for: received + short + damaged.
+    const despatchedByPid = new Map(despatched.map((d) => [d.pid, d]));
+    let receivedTotal = '0.00';
+    let lossTotal = '0.00';
+
+    const receiptLines = sourceLines.map((l) => {
+      const d = despatchedByPid.get(l.pid);
+      if (!d) throw badRequest(`Item ${l.pid} was not in this dispatch`);
+
+      const received = dec(l.receivedQty);
+      const shortQ = dec(l.shortQty);
+      const damaged = dec(l.damagedQty);
+
+      if (received.add(shortQ).add(damaged).sub(dec(d.qty)).abs().gt('0.0005')) {
+        throw badRequest(
+          `Item ${l.pid}: received + short + damaged must equal the ${d.qty} despatched`,
+        );
+      }
+
+      const prodCost = d.production_cost;
+      const recvVal = mul(l.receivedQty, prodCost);
+      const lossVal = mul(add(l.shortQty, l.damagedQty), prodCost);
+      receivedTotal = add(receivedTotal, recvVal);
+      lossTotal = add(lossTotal, lossVal);
+
+      return {
+        pid: l.pid,
+        pname: d.pname,
+        qty: d.qty,
+        received_qty: qty(l.receivedQty),
+        short_qty: qty(l.shortQty),
+        damaged_qty: qty(l.damagedQty),
+        price: d.wholesale_price,
+        total: mul(l.receivedQty, d.wholesale_price),
+      };
+    });
+
     const branches = await branchNames(tx, [request.from_branch, request.to_branch]);
     const freight = money(input.freight);
+
+    const { docNumber } = await issueDocumentNumber(tx, request.to_branch, 'RECEIPT');
 
     const received = await tx
       .insertInto('do_received')
       .values({
         do_req_id: input.requestId,
+        doc_number: docNumber,
         from_branch: request.from_branch,
         to_branch: request.to_branch,
         date: input.date,
@@ -431,27 +479,15 @@ export async function receiveTransfer(
         note: input.note ?? null,
         received_by: input.receivedBy ?? null,
         cargo_expense: freight,
-        gross: total,
-        net: add(total, freight),
+        gross: receivedTotal,
+        net: add(receivedTotal, freight),
         created_by: principal.empId,
         updated_by: principal.empId,
       })
       .returning('id')
       .executeTakeFirstOrThrow();
 
-    await tx
-      .insertInto('do_received_detail')
-      .values(
-        lines.map((l) => ({
-          inv_id: received.id,
-          pid: l.pid,
-          pname: l.pname,
-          qty: l.qty,
-          price: l.price,
-          total: l.total,
-        })),
-      )
-      .execute();
+    await tx.insertInto('do_received_detail').values(receiptLines.map((l) => ({ ...l, inv_id: received.id }))).execute();
 
     const posted = await postJournal(
       tx,
@@ -463,7 +499,8 @@ export async function receiveTransfer(
         fromBranchName: branches.get(request.from_branch) ?? '',
         toBranchName: branches.get(request.to_branch) ?? '',
         kind,
-        value: total,
+        value: add(receivedTotal, lossTotal),
+        receivedValue: receivedTotal,
         freight,
         freightPaidInCash: input.freightPaidInCash,
       }),
@@ -475,15 +512,26 @@ export async function receiveTransfer(
       .where('id', '=', input.requestId)
       .execute();
 
+    await tx
+      .updateTable('demand_order')
+      .set({ status: STATUS.RECEIVED, updated_at: new Date() })
+      .where('id', '=', request.do_id ?? -1)
+      .execute();
+
+    // Weighted-average wholesale cost (PRINCIPLES §17.9), FINISH goods only.
+    if (kind === 'FINISH') {
+      await updateWholesaleCosts(tx, request.to_branch, despatched, sourceLines);
+    }
+
     await writeAudit(
       principal,
       {
         form: DO_FORMS.RECEIVE[kind].label,
         action: 'Approve',
         detail:
-          `RCV:${received.id} | Received ${kind} stock against REQ:${input.requestId} | ` +
+          `${docNumber} | Received ${kind} stock against dispatch ${request.doc_number} | ` +
           `${branches.get(request.from_branch)} -> ${branches.get(request.to_branch)} | ` +
-          `Value ${fmt(total)}, Freight ${fmt(freight)}`,
+          `Received ${fmt(receivedTotal)}, Loss ${fmt(lossTotal)}, Freight ${fmt(freight)}`,
         invId: received.id,
       },
       tx,
@@ -491,6 +539,54 @@ export async function receiveTransfer(
 
     return { id: received.id, transId: posted.transId };
   });
+}
+
+/**
+ * Recalculate `branch_product.wholesale_cost` as a weighted average of what the
+ * branch now holds (its existing stock at the old average, plus what just
+ * arrived at this dispatch's wholesale price).
+ */
+async function updateWholesaleCosts(
+  tx: Tx,
+  branchId: number,
+  despatched: Array<{ pid: number; wholesale_price: string }>,
+  receivedLines: ReceiveLine[],
+): Promise<void> {
+  for (const d of despatched) {
+    const line = receivedLines.find((l) => l.pid === d.pid);
+    const receivedQty = dec(line?.receivedQty ?? '0');
+    if (receivedQty.lte(0)) continue;
+
+    const bp = await tx
+      .selectFrom('branch_product')
+      .select(['id', 'wholesale_cost'])
+      .where('branch_id', '=', branchId)
+      .where('product_id', '=', d.pid)
+      .executeTakeFirst();
+    if (!bp) continue;
+
+    // Existing on-hand quantity at this branch, before this receipt lands.
+    const prior = await tx
+      .selectFrom('do_received_detail')
+      .innerJoin('do_received', 'do_received.id', 'do_received_detail.inv_id')
+      .select(({ fn }) => fn.sum<string>('do_received_detail.received_qty').as('qty'))
+      .where('do_received.to_branch', '=', branchId)
+      .where('do_received_detail.pid', '=', d.pid)
+      .executeTakeFirst();
+    const oldQty = dec(prior?.qty ?? '0');
+
+    const oldCost = dec(bp.wholesale_cost);
+    const newCost =
+      oldQty.add(receivedQty).gt(0)
+        ? oldQty.mul(oldCost).add(receivedQty.mul(dec(d.wholesale_price))).div(oldQty.add(receivedQty))
+        : dec(d.wholesale_price);
+
+    await tx
+      .updateTable('branch_product')
+      .set({ wholesale_cost: money(newCost), updated_at: new Date() })
+      .where('id', '=', bp.id)
+      .execute();
+  }
 }
 
 /**

@@ -906,9 +906,11 @@ leftover. It is not one — it is Hold Sale, listed in Keep above.
    branch stock is still warehouse inventory and a branch owes only for what it
    has actually sold.
 
-   §6 is written the first way, because it matches the invoice-with-dues shape
-   your Ready Stock app already used and it makes each branch answerable for
-   what it is holding. **Say so if the second is how you really work.**
+   **Decided (Phase 5): debt starts on confirmed receipt, at wholesale value.**
+   A branch answers for what it holds, not for what it has sold. Stock in transit
+   is nobody's debt; shortages and transit damage recorded at receipt never
+   become one. §6 already reads this way and it matches the Ready Stock app's
+   invoice-with-dues shape.
 
 ### About the E-Store (§7)
 

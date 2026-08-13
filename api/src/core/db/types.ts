@@ -722,6 +722,8 @@ export interface DoRequestTable {
   id: Generated<number>;
   /** The demand order being fulfilled, when there is one. */
   do_id: number | null;
+  /** Branch-prefixed dispatch number, e.g. `WHS-DP-1`. */
+  doc_number: string;
   from_branch: number;
   to_branch: number;
   date: ColumnType<string, string, string>;
@@ -742,7 +744,14 @@ export interface DoRequestDetailTable {
   pid: number;
   pname: string | null;
   qty: Numeric;
+  /** Quantity actually fulfilled against this line. */
   inv_qty: Numeric;
+  /** The branch's charge — what the branch owes per unit. */
+  wholesale_price: Numeric;
+  /** The warehouse's true cost — never shown to a branch. */
+  production_cost: Numeric;
+  /** NEW or REPAIRED — travels with the unit. */
+  grade: Defaulted<string>;
   price: Numeric;
   total: Numeric;
   status: string | null;
@@ -751,6 +760,8 @@ export interface DoRequestDetailTable {
 export interface DoReceivedTable {
   id: Generated<number>;
   do_req_id: number | null;
+  /** Branch-prefixed receipt number, e.g. `MUL-RC-1`. */
+  doc_number: string;
   from_branch: number;
   to_branch: number;
   date: ColumnType<string, string, string>;
@@ -773,6 +784,12 @@ export interface DoReceivedDetailTable {
   pid: number;
   pname: string | null;
   qty: Numeric;
+  /** What actually arrived — the branch confirms this, per line. */
+  received_qty: Numeric;
+  /** Missing on arrival — never becomes the branch's debt. */
+  short_qty: Numeric;
+  /** Damaged in transit — never becomes the branch's debt. */
+  damaged_qty: Numeric;
   price: Numeric;
   total: Numeric;
 }

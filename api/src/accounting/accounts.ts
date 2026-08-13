@@ -35,6 +35,10 @@ export const ACC = {
   PURCHASE_DISCOUNT: 4020102,
   /** Cost of goods sold. */
   COGS: 5010101,
+  /** Production Wages — present in the legacy chart; unused (no pay system). */
+  PRODUCTION_WAGES: 5010102,
+  /** Short/damaged stock found on arrival at a branch — a company expense. */
+  STOCK_LOSS: 5010103,
   /** Inward freight / cargo on DO receiving. */
   FREIGHT_IN: 5020201,
   /**

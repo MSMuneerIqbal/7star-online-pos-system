@@ -8,7 +8,7 @@ backend. See [`../PLAN.md`](../PLAN.md) for the full rewrite plan.
 The table below predates [`../PLAN.md`](../PLAN.md) and describes the initial
 port against the reconstructed legacy schema. That port is done, but PLAN.md
 found the business model on top of it was wrong (see PRINCIPLES §16) and set
-a phased reshape in motion. Four phases have landed since:
+a phased reshape in motion. Six phases have landed since:
 
 - **The catalog split** (PLAN.md Phase 1) — `product` is now one row per
   model, company-wide; branch price/location/threshold live on the new
@@ -24,11 +24,19 @@ a phased reshape in motion. Four phases have landed since:
   login writes, and the reusable print shell with the masthead
   (migrations `1700000000015`–`1700000000016`).
 - **Raw items: cells and complete sets** (PLAN.md Phase 3) — `raw_product`
-  gains `part_type` (CELL / COMPLETE_SET / OTHER) plus cell specifications,
+  gains `part_type` (CELL / COMPLETE SET / OTHER) plus cell specifications,
   and the preview-before-commit Excel import lands here as its first
   consumer (migration `1700000000017`).
+- **Production** (PLAN.md Phase 4) — worker / issue / output / damage /
+  rework replaces the single production table; production cost is material
+  only, and purchase gains a RAW/FINISH kind that feeds company cost
+  (migration `1700000000018`).
+- **Demand, dispatch, receipt** (PLAN.md Phase 5) — dispatch carries
+  wholesale + production cost + grade per line; receipt records received /
+  short / damaged per line with weighted-average wholesale cost, and debt
+  lands on confirmed receipt (migration `1700000000019`).
 
-The rest of PLAN.md's phases (4 onward — production, dispatch, selling,
+The rest of PLAN.md's phases (6 onward — inter-branch account, selling,
 warranty, …) have not started. Treat the table below as
 "what the original port covered," not "what PLAN.md considers done."
 
@@ -43,7 +51,7 @@ warranty, …) have not started. Treat the table below as
 | Audit log | Done |
 | Posting engine — rules | Done — 30 tests |
 | Posting engine — DB writer | Done — **14 tests against real Postgres** |
-| Migrations | **Applied** — through `1700000000017` on Neon |
+| Migrations | **Applied** — through `1700000000019` on Neon |
 | Permission tree | **Reconstructed from the legacy UI** — 150/150 ids verified |
 | Catalog split — master `product` + `branch_product` | Done — PLAN.md Phase 1 |
 | Branch module (form 2) | Done — full CRUD, verified in a browser |
@@ -63,7 +71,7 @@ warranty, …) have not started. Treat the table below as
 | All 8 registration screens | Done — party accounts minted atomically |
 | Legacy `.mdf` extract + ETL tooling | **Written, cannot run, not needed** — see "Starting fresh" below |
 
-`npm test` → 158 passing. `npm run typecheck` → clean.
+`npm test` → 155 passing. `npm run typecheck` → clean.
 
 ### Four accounting defects found and fixed
 

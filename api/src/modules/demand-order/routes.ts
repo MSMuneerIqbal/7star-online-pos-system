@@ -27,6 +27,8 @@ const lineSchema = z.object({
     .refine((v) => Number(v) > 0, 'Quantity must be greater than zero'),
 });
 
+const decimalString = z.union([z.string(), z.number()]).transform(String);
+
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');
 
 export default async function demandOrderRoutes(app: FastifyInstance): Promise<void> {
@@ -142,7 +144,7 @@ export default async function demandOrderRoutes(app: FastifyInstance): Promise<v
 
       const [rows, count] = await Promise.all([
         base
-          .select(['id', 'do_id', 'date', 'from_branch', 'to_branch', 'status', 'gross', 'note'])
+          .select(['id', 'doc_number', 'do_id', 'date', 'from_branch', 'to_branch', 'status', 'gross', 'note'])
           .orderBy('date', 'desc')
           .orderBy('id', 'desc')
           .limit(q.pageSize)
@@ -162,15 +164,22 @@ export default async function demandOrderRoutes(app: FastifyInstance): Promise<v
       const body = z
         .object({
           date: dateString,
-          doId: z.coerce.number().int().positive().nullish(),
-          fromBranchId: z.coerce.number().int().positive(),
-          toBranchId: z.coerce.number().int().positive(),
+          doId: z.coerce.number().int().positive(),
           note: z.string().max(1000).nullish(),
-          lines: z.array(lineSchema).min(1, 'Add at least one item'),
+          lines: z
+            .array(
+              z.object({
+                pid: z.coerce.number().int().positive(),
+                qty: decimalString,
+                wholesalePrice: decimalString,
+                grade: z.enum(['NEW', 'REPAIRED']).optional(),
+              }),
+            )
+            .min(1, 'Add at least one item'),
         })
         .parse(req.body);
 
-      const result = await service.createRequest(req.principal, { ...body, kind: toKind(kind) });
+      const result = await service.dispatchOrder(req.principal, { ...body, kind: toKind(kind) });
       return reply.status(201).send(result);
     },
   });
@@ -199,14 +208,7 @@ export default async function demandOrderRoutes(app: FastifyInstance): Promise<v
     },
   });
 
-  /** Stage 3 — despatch. First ledger impact. */
-  app.post('/:kind/requests/:id/despatch', {
-    preHandler: guard('REQUEST', ACTION.EDIT),
-    handler: async (req) => {
-      const { id } = idParam.parse(req.params);
-      return service.despatchRequest(req.principal, id);
-    },
-  });
+  /** Stage 3 — despatch is part of dispatchOrder; stock leaves on dispatch. */
 
   // ---- stage 4: receipts ------------------------------------------------
   app.get('/:kind/received', {
@@ -225,6 +227,7 @@ export default async function demandOrderRoutes(app: FastifyInstance): Promise<v
         base
           .select([
             'id',
+            'doc_number',
             'do_req_id',
             'date',
             'from_branch',
@@ -257,7 +260,16 @@ export default async function demandOrderRoutes(app: FastifyInstance): Promise<v
           freightPaidInCash: z.boolean().default(true),
           note: z.string().max(1000).nullish(),
           receivedBy: z.string().max(150).nullish(),
-          lines: z.array(lineSchema).optional(),
+          lines: z
+            .array(
+              z.object({
+                pid: z.coerce.number().int().positive(),
+                receivedQty: decimalString,
+                shortQty: decimalString.default('0'),
+                damagedQty: decimalString.default('0'),
+              }),
+            )
+            .optional(),
         })
         .parse(req.body);
 
