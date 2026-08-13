@@ -102,6 +102,8 @@ export const VTYPE = {
   PRODUCTION: 'PFINV',
   /** Battery repair / servicing. */
   LAB: 'LABINV',
+  /** E-Store shipment — the branch ships, the warehouse accepts. */
+  ESTORE: 'ESINV',
 } as const;
 
 export type Vtype = (typeof VTYPE)[keyof typeof VTYPE];

@@ -559,6 +559,35 @@ export interface WarrantyPartTable {
   total: Numeric;
 }
 
+/** An E-Store shipment — the website's order, shipped by a branch at wholesale. */
+export interface EstoreShipmentTable {
+  id: Generated<number>;
+  doc_number: string;
+  order_reference: string;
+  branch_id: number;
+  date: ColumnType<string, string, string>;
+  customer_name: string | null;
+  shipping_address: string | null;
+  status: Defaulted<string>;
+  rejection_reason: string | null;
+  recorded_by: Defaulted<number>;
+  recorded_at: CreatedAt;
+  accepted_by: number | null;
+  accepted_at: Date | null;
+  note: string | null;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+}
+
+export interface EstoreShipmentDetailTable {
+  id: Generated<number>;
+  shipment_id: number;
+  product_id: number;
+  qty: Numeric;
+  wholesale_price: Numeric;
+  total: Numeric;
+}
+
 /** Single-row company profile. Supplies the header on every printed document. */
 export interface SettingTable {
   id: Generated<number>;
@@ -1177,6 +1206,8 @@ export interface Database {
   warranty_claim: WarrantyClaimTable;
   warranty_claim_detail: WarrantyClaimDetailTable;
   warranty_part: WarrantyPartTable;
+  estore_shipment: EstoreShipmentTable;
+  estore_shipment_detail: EstoreShipmentDetailTable;
   sale_customer: SaleCustomerTable;
   sale: SaleTable;
   sale_detail: SaleDetailTable;

@@ -27,6 +27,7 @@ export type DocType =
   | 'RECEIPT'
   | 'REMITTANCE'
   | 'WARRANTY'
+  | 'ESTORE'
   | 'LAB'
   | 'LAB_RECEIVED';
 
@@ -43,6 +44,7 @@ const DOC_CODE: Record<DocType, string | null> = {
   RECEIPT: 'RC',
   REMITTANCE: 'RM',
   WARRANTY: 'WC',
+  ESTORE: 'ES',
   LAB: 'LB',
   LAB_RECEIVED: 'LR',
 };
