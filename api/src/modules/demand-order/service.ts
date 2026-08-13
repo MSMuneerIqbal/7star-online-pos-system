@@ -26,8 +26,8 @@ import { badRequest, conflict, notFound } from '../../core/errors.js';
 import { writeAudit } from '../../core/audit.js';
 import { assertBranchAccess, type Principal } from '../../core/rbac.js';
 import { issueDocumentNumber } from '../../core/numbering.js';
-import { VTYPE } from '../../accounting/accounts.js';
-import { postTransferIn, postTransferOut, type StockKind } from '../../accounting/rules/transfer.js';
+import { ACC, VTYPE } from '../../accounting/accounts.js';
+import { postInterBranchDues, postTransferIn, postTransferOut, type StockKind } from '../../accounting/rules/transfer.js';
 import { postJournal, repostDocument } from '../../accounting/post.js';
 import { fmt } from '../../accounting/journal.js';
 
@@ -429,6 +429,7 @@ export async function receiveTransfer(
     const despatchedByPid = new Map(despatched.map((d) => [d.pid, d]));
     let receivedTotal = '0.00';
     let lossTotal = '0.00';
+    let wholesaleReceived = '0.00';
 
     const receiptLines = sourceLines.map((l) => {
       const d = despatchedByPid.get(l.pid);
@@ -449,6 +450,7 @@ export async function receiveTransfer(
       const lossVal = mul(add(l.shortQty, l.damagedQty), prodCost);
       receivedTotal = add(receivedTotal, recvVal);
       lossTotal = add(lossTotal, lossVal);
+      wholesaleReceived = add(wholesaleReceived, mul(l.receivedQty, d.wholesale_price));
 
       return {
         pid: l.pid,
@@ -505,6 +507,26 @@ export async function receiveTransfer(
         freightPaidInCash: input.freightPaidInCash,
       }),
     );
+
+    // Dues rise on confirmed receipt, at wholesale (PRINCIPLES §17.6).
+    const receivingBranch = await tx
+      .selectFrom('branch')
+      .select('inter_branch_account')
+      .where('id', '=', request.to_branch)
+      .executeTakeFirst();
+    if (receivingBranch?.inter_branch_account && Number(wholesaleReceived) > 0) {
+      await postJournal(
+        tx,
+        postInterBranchDues({
+          invId: received.id,
+          date: input.date,
+          branchId: request.to_branch,
+          warehouseAccountId: ACC.INTER_BRANCH_DUE,
+          branchAccountId: receivingBranch.inter_branch_account,
+          value: wholesaleReceived,
+        }),
+      );
+    }
 
     await tx
       .updateTable('do_request')

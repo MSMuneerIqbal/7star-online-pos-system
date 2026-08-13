@@ -45,6 +45,8 @@ export interface BranchTable {
   closing_day: string | null;
   /** Deactivating hides a branch without deleting its history. */
   is_active: Defaulted<boolean>;
+  /** The branch's inter-branch "due to warehouse" account (chart group 05). */
+  inter_branch_account: number | null;
   longitude: Numeric;
   latitude: Numeric;
   created_at: CreatedAt;
@@ -904,6 +906,24 @@ export interface ReworkTable {
   updated_by: Defaulted<number>;
 }
 
+/** A branch's remittance to the warehouse — confirmed by the warehouse. */
+export interface RemittanceTable {
+  id: Generated<number>;
+  doc_number: string;
+  date: ColumnType<string, string, string>;
+  from_branch: number;
+  to_branch: number;
+  amount: Numeric;
+  method: Defaulted<string>;
+  note: string | null;
+  status: Defaulted<string>;
+  confirmed_at: Date | null;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
 // ---------------------------------------------------------------------------
 // Lab — battery repair and servicing (phase 8)
 // ---------------------------------------------------------------------------
@@ -1044,6 +1064,7 @@ export interface Database {
   used_stock: UsedStockTable;
   damaged_stock: DamagedStockTable;
   rework: ReworkTable;
+  remittance: RemittanceTable;
   lab_received: LabReceivedTable;
   lab_received_detail: LabReceivedDetailTable;
   lab: LabTable;

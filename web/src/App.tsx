@@ -17,6 +17,7 @@ import { VoucherPage } from '@/features/voucher/VoucherPage';
 import { LedgerPage } from '@/features/ledger/LedgerPage';
 import { TrialBalancePage } from '@/features/ledger/TrialBalancePage';
 import { DemandOrderPage } from '@/features/demand-order/DemandOrderPage';
+import { RemittancePage } from '@/features/remittance/RemittancePage';
 import {
   BalanceSheetPage,
   CashBookPage,
@@ -86,6 +87,7 @@ const IMPLEMENTED: Record<string, React.ComponentType> = {
   // One page covers what the legacy system split across ten controllers.
   '/demand-orders/raw': () => <DemandOrderPage kind="raw" />,
   '/demand-orders/finish': () => <DemandOrderPage kind="finish" />,
+  '/remittances': RemittancePage,
 
   // Reports — every one of these was a dead link in the legacy sidebar.
   '/reports/raw/stock': () => <StockReportPage kind="raw" />,

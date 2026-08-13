@@ -91,6 +91,89 @@ export interface TransferInInput {
 }
 
 /**
+ * Inter-branch dues — the branch's obligation, at wholesale value.
+ *
+ * On confirmed receipt the branch owes the warehouse for what actually arrived.
+ * The warehouse's "due from branches" account is debited and the branch's own
+ * "due to warehouse" account is credited; the two sides always cancel on
+ * consolidation, so internal movement never inflates the combined balance sheet
+ * (PRINCIPLES §6).
+ */
+export interface InterBranchDuesInput {
+  invId: number;
+  date: string;
+  branchId: number;
+  /** The warehouse's fixed "due from branches" account. */
+  warehouseAccountId: number;
+  /** The receiving branch's own "due to warehouse" account. */
+  branchAccountId: number;
+  /** Wholesale value of what actually arrived. */
+  value: MoneyString;
+}
+
+export function postInterBranchDues(input: InterBranchDuesInput): Journal {
+  const ref = `Inter-branch dues #${input.invId}`;
+
+  return buildJournal({
+    vtype: VTYPE.INTER_BRANCH_DUE,
+    date: input.date,
+    invId: input.invId,
+    branchId: input.branchId,
+    legs: [
+      debit(input.warehouseAccountId, input.value, `Due from branch – ${ref}`),
+      credit(input.branchAccountId, input.value, `Due to warehouse – ${ref}`),
+    ],
+  });
+}
+
+/**
+ * A branch's remittance to the warehouse.
+ *
+ *   branch voucher:    Dr branch "due to warehouse"  /  Cr branch cash/bank
+ *   warehouse voucher: Dr warehouse cash/bank        /  Cr warehouse "due from branches"
+ */
+export interface RemittanceInput {
+  invId: number;
+  date: string;
+  branchId: number;
+  warehouseBranchId: number;
+  /** The branch's own inter-branch account. */
+  branchAccountId: number;
+  /** The warehouse's fixed "due from branches" account. */
+  warehouseAccountId: number;
+  amount: MoneyString;
+  method: 'CASH' | 'BANK';
+}
+
+export function postRemittance(input: RemittanceInput): Journal[] {
+  const cashAccount = input.method === 'BANK' ? ACC.BANK : ACC.CASH;
+  const ref = `Remittance #${input.invId}`;
+
+  return [
+    buildJournal({
+      vtype: VTYPE.INTER_BRANCH_DUE,
+      date: input.date,
+      invId: input.invId,
+      branchId: input.branchId,
+      legs: [
+        debit(input.branchAccountId, input.amount, `Remitted to warehouse – ${ref}`),
+        credit(cashAccount, input.amount, `Cash remitted – ${ref}`),
+      ],
+    }),
+    buildJournal({
+      vtype: VTYPE.INTER_BRANCH_DUE,
+      date: input.date,
+      invId: input.invId,
+      branchId: input.warehouseBranchId,
+      legs: [
+        debit(cashAccount, input.amount, `Remittance received – ${ref}`),
+        credit(input.warehouseAccountId, input.amount, `Received from branch – ${ref}`),
+      ],
+    }),
+  ];
+}
+
+/**
  * Stock received at a branch.
  *
  *   Dr  inventory              received value

@@ -50,6 +50,11 @@ export const ACC = {
    * in-transit value and nets to zero company-wide once a transfer is received.
    */
   INTER_BRANCH: 1010501,
+  /**
+   * The warehouse's "due from branches" — what every branch owes it, in total.
+   * Mirrored by one per-branch "due to warehouse" account; the pair nets to zero.
+   */
+  INTER_BRANCH_DUE: 1010502,
 } as const;
 
 /**
@@ -89,6 +94,8 @@ export const VTYPE = {
   BRANCH_TRANSFER: 'BTINV',
   /** Stock arriving at a branch against a transfer. */
   DO_RECEIVED: 'DORINV',
+  /** Inter-branch dues — what a branch owes the warehouse at wholesale. */
+  INTER_BRANCH_DUE: 'IBDUE',
   /** Raw material converted into finished goods. */
   PRODUCTION: 'PFINV',
   /** Battery repair / servicing. */

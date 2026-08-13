@@ -35,9 +35,13 @@ a phased reshape in motion. Six phases have landed since:
   wholesale + production cost + grade per line; receipt records received /
   short / damaged per line with weighted-average wholesale cost, and debt
   lands on confirmed receipt (migration `1700000000019`).
+- **Inter-branch account and remittance** (PLAN.md Phase 6) — one inter-branch
+  account per branch plus a warehouse "due from branches" account; dues rise
+  on receipt at wholesale and fall on confirmed remittance; the branch dues
+  report (migration `1700000000020`).
 
-The rest of PLAN.md's phases (6 onward — inter-branch account, selling,
-warranty, …) have not started. Treat the table below as
+The rest of PLAN.md's phases (7 onward — selling, warranty, E-Store, …)
+have not started. Treat the table below as
 "what the original port covered," not "what PLAN.md considers done."
 
 | Area | State |
@@ -51,7 +55,7 @@ warranty, …) have not started. Treat the table below as
 | Audit log | Done |
 | Posting engine — rules | Done — 30 tests |
 | Posting engine — DB writer | Done — **14 tests against real Postgres** |
-| Migrations | **Applied** — through `1700000000019` on Neon |
+| Migrations | **Applied** — through `1700000000020` on Neon |
 | Permission tree | **Reconstructed from the legacy UI** — 150/150 ids verified |
 | Catalog split — master `product` + `branch_product` | Done — PLAN.md Phase 1 |
 | Branch module (form 2) | Done — full CRUD, verified in a browser |
@@ -71,7 +75,7 @@ warranty, …) have not started. Treat the table below as
 | All 8 registration screens | Done — party accounts minted atomically |
 | Legacy `.mdf` extract + ETL tooling | **Written, cannot run, not needed** — see "Starting fresh" below |
 
-`npm test` → 155 passing. `npm run typecheck` → clean.
+`npm test` → 158 passing. `npm run typecheck` → clean.
 
 ### Four accounting defects found and fixed
 

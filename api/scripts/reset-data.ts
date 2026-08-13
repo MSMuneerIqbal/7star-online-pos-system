@@ -69,6 +69,8 @@ const TABLES = [
   'lab',
   'lab_received_detail',
   'lab_received',
+  // inter-branch
+  'remittance',
   // catalog and parties
   'branch_product',
   'product',

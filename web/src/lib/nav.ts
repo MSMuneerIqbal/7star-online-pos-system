@@ -115,6 +115,7 @@ export const NAV: readonly NavSection[] = [
           { label: 'DO Received', path: '/demand-orders/finish/received', action: [49, 5101], status: 'ported' },
         ],
       },
+      { label: 'Remittance', path: '/remittances', action: [55, 5111], status: 'ported' },
     ],
   },
 

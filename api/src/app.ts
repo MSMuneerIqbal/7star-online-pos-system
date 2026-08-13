@@ -26,6 +26,7 @@ import catalogRoutes from './modules/catalog/routes.js';
 import branchProductRoutes from './modules/branch-product/routes.js';
 import partyRoutes from './modules/parties/routes.js';
 import importRoutes from './modules/import/routes.js';
+import remittanceRoutes from './modules/remittance/routes.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -105,6 +106,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(branchProductRoutes, { prefix: '/api/v1/branch-products' });
   await app.register(partyRoutes, { prefix: '/api/v1' });
   await app.register(importRoutes, { prefix: '/api/v1/import' });
+  await app.register(remittanceRoutes, { prefix: '/api/v1/remittances' });
 
   // Remaining feature modules land here as phases 4-10 land:
   //   await app.register(brandRoutes, { prefix: '/api/v1/brands' });
