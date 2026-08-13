@@ -11,9 +11,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { db, withTransaction } from '../../core/db/index.js';
-import { badRequest, conflict, notFound } from '../../core/errors.js';
+import { badRequest, conflict, forbidden, notFound } from '../../core/errors.js';
 import { writeAudit } from '../../core/audit.js';
-import { invalidateRoleCache, resolveBranchId } from '../../core/rbac.js';
+import { invalidateRoleCache, Permissions, resolveBranchId, type Principal } from '../../core/rbac.js';
 import { hashPassword } from '../../core/auth/password.js';
 import { formPermissions, likeTerm, listQuery, offset, paged } from '../../core/crud.js';
 
@@ -21,9 +21,64 @@ const ROLES = formPermissions(14, 801);
 const ROLE_ASSIGN = formPermissions(15, 802);
 const LOGINS = formPermissions(16, 803);
 const LOGS = formPermissions(38, 804);
+const LOGIN_HISTORY = formPermissions(54, 805);
 const SETTINGS = formPermissions(37, 901);
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
+
+/**
+ * A branch admin cannot hand out a permission it does not itself hold.
+ *
+ * Two distinct checks, at two different times:
+ *  - `assertRoleWithinOwnGrants` runs at ASSIGNMENT time (handing a role to a
+ *    user), because a role's grants are not transitively bounded by whoever
+ *    last edited them — a role edited by a super admin, later assigned by a
+ *    branch admin, could still exceed that branch admin's own grants.
+ *  - the inline check in PUT /roles/:id/permissions runs at EDIT time, before
+ *    a role's grant set is replaced.
+ */
+
+/** Reject any permission in the role the acting principal does not itself hold. */
+async function assertRoleWithinOwnGrants(
+  principal: Principal,
+  roleId: number,
+): Promise<void> {
+  if (principal.isSuperAdmin) return;
+
+  const own = await Permissions.forPrincipal(principal);
+
+  const grants = await db
+    .selectFrom('role_assign')
+    .select(['form_id', 'action_id'])
+    .where('role_id', '=', roleId)
+    .execute();
+
+  for (const g of grants) {
+    if (!own.hasAction(g.form_id, g.action_id)) {
+      throw forbidden(
+        `This role includes permission ${g.form_id}/${g.action_id}, which you do not hold yourself`,
+      );
+    }
+  }
+}
+
+/** Reject any requested grant the acting principal does not itself hold. */
+async function assertGrantsWithinOwnGrants(
+  principal: Principal,
+  grants: readonly { formId: number; actionId: number }[],
+): Promise<void> {
+  if (principal.isSuperAdmin) return;
+
+  const own = await Permissions.forPrincipal(principal);
+
+  for (const g of grants) {
+    if (!own.hasAction(g.formId, g.actionId)) {
+      throw forbidden(
+        `You cannot grant permission ${g.formId}/${g.actionId} — you do not hold it yourself`,
+      );
+    }
+  }
+}
 
 export default async function adminRoutes(app: FastifyInstance): Promise<void> {
   // -------------------------------------------------------------------------
@@ -39,7 +94,13 @@ export default async function adminRoutes(app: FastifyInstance): Promise<void> {
         .select(['role.id', 'role.name', 'role.branch_id', 'branch.name as branch_name']);
 
       if (!req.principal.isSuperAdmin) {
-        q = q.where('role.branch_id', '=', req.principal.branchId);
+        q = q
+          .where('role.branch_id', '=', req.principal.branchId)
+          // A branch admin sees its own roles plus anything the super admin
+          // set up for its branch — not other branch admins' private roles.
+          .where((eb) =>
+            eb.or([eb('role.created_by', '=', req.principal.empId), eb('role.created_by', '=', 0)]),
+          );
       }
 
       return q.orderBy('role.name').execute();
@@ -228,6 +289,9 @@ export default async function adminRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
+      // A branch admin can only hand out what it already holds.
+      await assertGrantsWithinOwnGrants(req.principal, body.grants);
+
       await withTransaction(async (tx) => {
         await tx.deleteFrom('role_assign').where('role_id', '=', id).execute();
 
@@ -283,7 +347,16 @@ export default async function adminRoutes(app: FastifyInstance): Promise<void> {
         .leftJoin('employee', 'employee.id', 'user_logins.emp_id');
 
       if (!req.principal.isSuperAdmin) {
-        base = base.where('user_logins.branch_id', '=', req.principal.branchId);
+        base = base
+          .where('user_logins.branch_id', '=', req.principal.branchId)
+          // Same ownership rule as roles: own logins plus super-admin-created
+          // ones, not another branch admin's.
+          .where((eb) =>
+            eb.or([
+              eb('user_logins.created_by', '=', req.principal.empId),
+              eb('user_logins.created_by', '=', 0),
+            ]),
+          );
       }
 
       const term = likeTerm(q.search);
@@ -341,6 +414,9 @@ export default async function adminRoutes(app: FastifyInstance): Promise<void> {
 
       if (!employee) throw badRequest(`Unknown employee id ${body.empId}`);
 
+      // A branch admin cannot hand a role whose powers exceed its own.
+      await assertRoleWithinOwnGrants(req.principal, body.roleId);
+
       const row = await withTransaction(async (tx) => {
         const created = await tx
           .insertInto('user_logins')
@@ -387,6 +463,8 @@ export default async function adminRoutes(app: FastifyInstance): Promise<void> {
           isActive: z.boolean().optional(),
           /** Optional reset; omitted leaves the existing hash alone. */
           password: z.string().min(10).max(200).optional(),
+          /** Reassign the person across branches. Super-admin-only. */
+          branchId: z.coerce.number().int().positive().optional(),
         })
         .parse(req.body);
 
@@ -404,12 +482,28 @@ export default async function adminRoutes(app: FastifyInstance): Promise<void> {
         throw conflict('A super admin login cannot be disabled here');
       }
 
+      // Reassigning a person across branches is the super admin's power alone.
+      if (body.branchId !== undefined) {
+        if (!req.principal.isSuperAdmin) {
+          throw forbidden('Only the super admin can reassign a login to another branch');
+        }
+        if (user.emp_id === 0) {
+          throw conflict('The super admin account does not belong to a branch');
+        }
+      }
+
+      // Handing a role to a user is subject to the same subset rule as editing one.
+      if (body.roleId !== undefined) {
+        await assertRoleWithinOwnGrants(req.principal, body.roleId);
+      }
+
       return withTransaction(async (tx) => {
         const updated = await tx
           .updateTable('user_logins')
           .set({
             ...(body.roleId !== undefined ? { role_id: body.roleId } : {}),
             ...(body.isActive !== undefined ? { is_active: body.isActive } : {}),
+            ...(body.branchId !== undefined ? { branch_id: body.branchId } : {}),
             ...(body.password !== undefined
               ? { password_hash: await hashPassword(body.password) }
               : {}),
@@ -420,9 +514,20 @@ export default async function adminRoutes(app: FastifyInstance): Promise<void> {
           .returning(['id', 'username', 'is_active'])
           .executeTakeFirstOrThrow();
 
+        // employee.branch_id is what resolvePrincipal actually reads for access
+        // control — writing only user_logins.branch_id would be a silent no-op.
+        if (body.branchId !== undefined) {
+          await tx
+            .updateTable('employee')
+            .set({ branch_id: body.branchId, updated_at: new Date() })
+            .where('id', '=', user.emp_id)
+            .execute();
+        }
+
         const changes = [
           body.roleId !== undefined && 'role',
           body.isActive !== undefined && `status=${body.isActive ? 'active' : 'disabled'}`,
+          body.branchId !== undefined && `branch=${body.branchId}`,
           body.password !== undefined && 'password reset',
         ].filter(Boolean);
 
@@ -503,6 +608,47 @@ export default async function adminRoutes(app: FastifyInstance): Promise<void> {
         .execute();
 
       return rows.map((r) => r.form).filter(Boolean);
+    },
+  });
+
+  // -------------------------------------------------------------------------
+  // Login history — who signed in, when, from where
+  // -------------------------------------------------------------------------
+
+  app.get('/login-history', {
+    preHandler: app.requireAction(LOGIN_HISTORY.formId, LOGIN_HISTORY.view),
+    handler: async (req) => {
+      const q = listQuery.parse(req.query);
+
+      let base = db
+        .selectFrom('login_history')
+        .leftJoin('branch', 'branch.id', 'login_history.branch_id');
+
+      if (!req.principal.isSuperAdmin) {
+        base = base.where('login_history.branch_id', '=', req.principal.branchId);
+      }
+
+      const term = likeTerm(q.search);
+      if (term) base = base.where('login_history.username', 'ilike', term);
+
+      const [rows, count] = await Promise.all([
+        base
+          .select([
+            'login_history.id',
+            'login_history.at',
+            'login_history.username',
+            'login_history.ip',
+            'login_history.user_agent',
+            'branch.name as branch_name',
+          ])
+          .orderBy('login_history.id', 'desc')
+          .limit(q.pageSize)
+          .offset(offset(q))
+          .execute(),
+        base.select(({ fn }) => fn.countAll<string>().as('n')).executeTakeFirstOrThrow(),
+      ]);
+
+      return paged(rows, Number(count.n), q);
     },
   });
 

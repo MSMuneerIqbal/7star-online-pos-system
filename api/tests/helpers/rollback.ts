@@ -44,9 +44,12 @@ export async function seedLedgerFixtures(
   tx: Tx,
   opts: { branchId: number; accountIds: readonly number[] },
 ): Promise<void> {
+  // branch.code is required (NOT NULL, enforced by a CHECK) for any real
+  // branch since the catalog-split migration — a bare id/name insert now
+  // violates it.
   await tx
     .insertInto('branch')
-    .values({ id: opts.branchId, name: `Test Branch ${opts.branchId}` })
+    .values({ id: opts.branchId, name: `Test Branch ${opts.branchId}`, code: `T${opts.branchId}` })
     .onConflict((oc) => oc.column('id').doNothing())
     .execute();
 

@@ -12,6 +12,7 @@ import { emptyLine, type InvoiceLine } from '@/components/invoice/useInvoiceLine
 
 interface ProductionRow {
   id: number;
+  doc_number: string;
   date: string;
   qty: number;
   material_cost: string;
@@ -51,7 +52,7 @@ export function ProductionPage() {
   });
 
   const columns: readonly Column<ProductionRow>[] = [
-    { key: 'id', header: 'Run', numeric: true, width: '5rem' },
+    { key: 'doc_number', header: 'Run', width: '6rem' },
     { key: 'date', header: 'Date', width: '7.5rem' },
     { key: 'product_name', header: 'Product', cell: (r) => r.product_name ?? '—' },
     { key: 'qty', header: 'Qty made', numeric: true, width: '7rem' },

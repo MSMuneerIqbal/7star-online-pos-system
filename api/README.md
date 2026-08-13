@@ -3,7 +3,30 @@
 Fastify + TypeScript + Kysely + PostgreSQL. Replaces the ASP.NET Core 8 MVC
 backend. See [`../PLAN.md`](../PLAN.md) for the full rewrite plan.
 
-## Status — phases 1 and 2 complete, running against Neon
+## Status — running against Neon; PLAN.md's phased reshape now under way
+
+The table below predates [`../PLAN.md`](../PLAN.md) and describes the initial
+port against the reconstructed legacy schema. That port is done, but PLAN.md
+found the business model on top of it was wrong (see PRINCIPLES §16) and set
+a phased reshape in motion. Three phases have landed since:
+
+- **The catalog split** (PLAN.md Phase 1) — `product` is now one row per
+  model, company-wide; branch price/location/threshold live on the new
+  `branch_product` table (migration `1700000000010`, plus the code that
+  reads and writes it).
+- **Groundwork** (PLAN.md Phase 0) — dropped the unused `province`/`city`/
+  `department` reference tables, moved `product.image_path` to a file path
+  column, renamed `lease_sale` to its real name `hold_sale`, and corrected
+  the brand colour (migrations `1700000000011`–`1700000000014`).
+- **Identity, users, numbering, the document shell** (PLAN.md Phase 2) —
+  branch-prefixed document numbers (`MUL-1`, `MUL-SR-1`) for all nine
+  document types, login history, permission-subset enforcement on role and
+  login writes, and the reusable print shell with the masthead
+  (migrations `1700000000015`–`1700000000016`).
+
+The rest of PLAN.md's phases (3 onward — production, dispatch, selling,
+warranty, …) have not started. Treat the table below as
+"what the original port covered," not "what PLAN.md considers done."
 
 | Area | State |
 |---|---|
@@ -16,8 +39,9 @@ backend. See [`../PLAN.md`](../PLAN.md) for the full rewrite plan.
 | Audit log | Done |
 | Posting engine — rules | Done — 30 tests |
 | Posting engine — DB writer | Done — **14 tests against real Postgres** |
-| Migrations | **Applied** — 53 tables on Neon |
+| Migrations | **Applied** — through `1700000000016` on Neon |
 | Permission tree | **Reconstructed from the legacy UI** — 150/150 ids verified |
+| Catalog split — master `product` + `branch_product` | Done — PLAN.md Phase 1 |
 | Branch module (form 2) | Done — full CRUD, verified in a browser |
 | Sale module (form 12) | Done — posting verified end to end, ledger balances |
 | Purchase module (form 10) | Done — freight capitalised, ledger balances |
@@ -33,12 +57,9 @@ backend. See [`../PLAN.md`](../PLAN.md) for the full rewrite plan.
 | Lab Receiving (49) / Lab Invoices (50) | Done — **workflow designed**, see PLAN.md §12 |
 | Roles, Role Assignment, Logins, Logs, Settings | Done |
 | All 8 registration screens | Done — party accounts minted atomically |
-| Phase 0 extract + ETL tooling | **Written, cannot run** — needs SQL Server |
+| Legacy `.mdf` extract + ETL tooling | **Written, cannot run, not needed** — see "Starting fresh" below |
 
-`npm test` → 142 passing. `npm run typecheck` → clean.
-
-**All planned phases are complete** except phase 0 (the legacy data extract),
-which needs SQL Server and is a data-migration task rather than development.
+`npm test` → 153 passing. `npm run typecheck` → clean.
 
 ### Four accounting defects found and fixed
 
@@ -147,7 +168,7 @@ npm run dev
 Create a super-admin login (idempotent — re-run to reset the password):
 
 ```bash
-npx tsx scripts/bootstrap.ts admin <password>
+npx tsx scripts/setup.ts "Your Company" "Head Office" admin <password>
 ```
 
 `GET /health` reports `degraded` when the database is unreachable, `ok` otherwise.
@@ -157,7 +178,7 @@ npx tsx scripts/bootstrap.ts admin <password>
 ```
 migrations/     SQL migrations — the SOURCE OF TRUTH for the schema
 db/accounts.md  Chart of accounts, posting rules, known defects
-scripts/        db-check (connectivity + type parsers), bootstrap (first login)
+scripts/        db-check (connectivity + type parsers), setup (first login)
 src/core/       config, db, money, errors, auth, rbac, audit, plugins
 src/accounting/ posting engine — accounts, journal, rules, writer
 src/modules/    one folder per feature (routes + service + schema)

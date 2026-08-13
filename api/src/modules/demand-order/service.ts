@@ -23,6 +23,7 @@
 import { db, withTransaction, type Tx } from '../../core/db/index.js';
 import { add, gt, money, mul, type MoneyString } from '../../core/money.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
+import { issueDocumentNumber } from '../../core/numbering.js';
 import { writeAudit } from '../../core/audit.js';
 import { assertBranchAccess, type Principal } from '../../core/rbac.js';
 import { VTYPE } from '../../accounting/accounts.js';
@@ -151,10 +152,14 @@ export async function createOrder(
   return withTransaction(async (tx) => {
     const { lines, total } = await priceLines(tx, input.kind, input.lines);
 
+    // Numbered against the requesting branch (to_branch), which raises it.
+    const { docNumber } = await issueDocumentNumber(tx, input.toBranchId, 'DEMAND_ORDER');
+
     const order = await tx
       .insertInto('demand_order')
       .values({
         date: input.date,
+        doc_number: docNumber,
         from_branch: input.fromBranchId,
         to_branch: input.toBranchId,
         type: input.kind,

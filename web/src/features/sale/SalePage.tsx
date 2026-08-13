@@ -13,6 +13,7 @@ import { useInvoiceLines } from '@/components/invoice/useInvoiceLines';
 
 interface SaleRow {
   id: number;
+  doc_number: string;
   date: string;
   net_total: string;
   received: string;
@@ -54,7 +55,7 @@ export function SalePage() {
   });
 
   const columns: readonly Column<SaleRow>[] = [
-    { key: 'id', header: 'Invoice', numeric: true, width: '5rem' },
+    { key: 'doc_number', header: 'Invoice', width: '6rem' },
     { key: 'date', header: 'Date', width: '8rem' },
     { key: 'customer_name', header: 'Customer', cell: (r) => r.customer_name ?? '—' },
     { key: 'net_total', header: 'Net Total', numeric: true, cell: (r) => fmtMoney(r.net_total) },
@@ -102,7 +103,7 @@ export function SalePage() {
             ? (row) => (
                 <button
                   type="button"
-                  title={`Print invoice ${row.id}`}
+                  title={`Print invoice ${row.doc_number}`}
                   className="rounded-sm p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand-600"
                   onClick={() => window.open(`/print/sale/${row.id}?auto=1`, '_blank', 'noopener')}
                 >
@@ -141,9 +142,15 @@ function SaleComposer({ onDone }: { onDone: () => void }) {
 
   const grid = useInvoiceLines();
 
+  // Branches and customers load immediately — the branch picker itself
+  // depends on this response. Product pricing is branch-specific since the
+  // catalog split, so the server only fills in `products` once `branchId`
+  // is on the query; refetch when it changes rather than gating the whole
+  // request behind it (that would make the branch picker unreachable).
   const formData = useQuery({
-    queryKey: ['sales', 'form-data'],
-    queryFn: () => api.get<FormData>('/sales/form-data'),
+    queryKey: ['sales', 'form-data', branchId],
+    queryFn: () =>
+      api.get<FormData>(`/sales/form-data${branchId !== null ? `?branchId=${branchId}` : ''}`),
   });
 
   const isWalkIn = custId !== null && custId === formData.data?.walkInCustomerId;
@@ -253,7 +260,13 @@ function SaleComposer({ onDone }: { onDone: () => void }) {
               id="branch"
               className="field-input"
               value={branchId ?? ''}
-              onChange={(e) => setBranchId(e.target.value ? Number(e.target.value) : null)}
+              onChange={(e) => {
+                setBranchId(e.target.value ? Number(e.target.value) : null);
+                // Prices are branch-specific — lines picked under a
+                // different branch would otherwise keep showing a price
+                // that isn't this branch's.
+                grid.reset();
+              }}
             >
               <option value="">Select a branch…</option>
               {formData.data?.branches.map((b) => (

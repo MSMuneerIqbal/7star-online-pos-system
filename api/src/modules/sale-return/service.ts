@@ -11,6 +11,7 @@
 import { db, withTransaction, type Tx } from '../../core/db/index.js';
 import { add, gt, money, mul, sub, type MoneyString } from '../../core/money.js';
 import { badRequest, notFound, unprocessable } from '../../core/errors.js';
+import { issueDocumentNumber } from '../../core/numbering.js';
 import { formatInvoiceAudit, writeAudit } from '../../core/audit.js';
 import { assertBranchAccess, resolveBranchId, type Principal } from '../../core/rbac.js';
 import { VTYPE, WALK_IN_CUSTOMER_ID } from '../../accounting/accounts.js';
@@ -270,10 +271,13 @@ export async function createSaleReturn(
 
     if (input.saleId) await assertWithinOriginal(tx, input.saleId, totals.netTotal);
 
+    const { docNumber } = await issueDocumentNumber(tx, branchId, 'SALE_RETURN');
+
     const created = await tx
       .insertInto('sale_return')
       .values({
         date: input.date,
+        doc_number: docNumber,
         sale_id: input.saleId ?? null,
         cust_id: input.custId,
         branch_id: branchId,

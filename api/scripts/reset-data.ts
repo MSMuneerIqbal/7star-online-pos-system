@@ -41,8 +41,8 @@ const TABLES = [
   'sale_return',
   'sale_detail',
   'sale',
-  'lease_sale_detail',
-  'lease_sale',
+  'hold_sale_detail',
+  'hold_sale',
   'sale_customer',
   // purchases
   'purchase_return_detail',
@@ -65,6 +65,7 @@ const TABLES = [
   'lab_received_detail',
   'lab_received',
   // catalog and parties
+  'branch_product',
   'product',
   'raw_product',
   'brand',
@@ -73,9 +74,12 @@ const TABLES = [
   'supplier',
   // access
   'refresh_token',
+  'login_history',
   'role_assign',
   'role',
   'user_log',
+  // document numbering — deleted before branch, which it references
+  'document_counter',
 ] as const;
 
 console.log(`Wiping ${TABLES.length} table(s)…\n`);

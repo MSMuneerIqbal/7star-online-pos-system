@@ -59,6 +59,14 @@ export const NAV: readonly NavSection[] = [
   },
 
   {
+    headId: 12,
+    title: 'Branch Catalog',
+    items: [
+      { label: 'My Prices', path: '/branch-products', action: [53, 12011], status: 'ported' },
+    ],
+  },
+
+  {
     headId: 3,
     title: 'Purchase',
     items: [
@@ -73,7 +81,7 @@ export const NAV: readonly NavSection[] = [
     items: [
       { label: 'Sale', path: '/sales', action: [12, 4011], status: 'ported' },
       { label: 'Sale Return', path: '/sale-returns', action: [13, 4021], status: 'ported' },
-      { label: 'Hold Sale', path: '/lease-sales', action: [51, 4031], status: 'ported' },
+      { label: 'Hold Sale', path: '/hold-sales', action: [51, 4031], status: 'ported' },
     ],
   },
 
@@ -210,6 +218,7 @@ export const NAV: readonly NavSection[] = [
       { label: 'Role Assignment', path: '/users/role-assign', action: [15, 8021], status: 'ported' },
       { label: 'User Logins', path: '/users/logins', action: [16, 8031], status: 'ported' },
       { label: 'User Logs', path: '/users/logs', action: [38, 8041], status: 'ported' },
+      { label: 'Login History', path: '/users/login-history', action: [54, 8051], status: 'ported' },
     ],
   },
 

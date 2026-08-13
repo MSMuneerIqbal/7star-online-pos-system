@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { db, withTransaction } from '../../core/db/index.js';
 import { add, money, mul, type MoneyString } from '../../core/money.js';
 import { badRequest, notFound } from '../../core/errors.js';
+import { issueDocumentNumber } from '../../core/numbering.js';
 import { writeAudit } from '../../core/audit.js';
 import { assertBranchAccess, resolveBranchId } from '../../core/rbac.js';
 import { formPermissions, likeTerm, listQuery, offset, paged } from '../../core/crud.js';
@@ -70,6 +71,7 @@ export default async function productionRoutes(app: FastifyInstance): Promise<vo
         base
           .select([
             'production.id',
+            'production.doc_number',
             'production.date',
             'production.qty',
             'production.material_cost',
@@ -95,12 +97,13 @@ export default async function productionRoutes(app: FastifyInstance): Promise<vo
     handler: async (req) => {
       const isSuper = req.principal.isSuperAdmin;
 
-      let products = db
+      // Production issues from the master catalog — company-wide since the
+      // catalog split, so there is no branch to filter finished goods by
+      // here.
+      const products = db
         .selectFrom('product')
         .select(['id', 'name', 'price'])
         .where('is_active', '=', true);
-
-      if (!isSuper) products = products.where('branch_id', '=', req.principal.branchId);
 
       let branches = db.selectFrom('branch').select(['id', 'name']).where('id', '>', 0);
       if (!isSuper) branches = branches.where('id', '=', req.principal.branchId);
@@ -197,10 +200,13 @@ export default async function productionRoutes(app: FastifyInstance): Promise<vo
         // Unit cost becomes the finished product's carrying value.
         const perUnit = money(String(Number(totalCost) / input.qty));
 
+        const { docNumber } = await issueDocumentNumber(tx, branchId, 'PRODUCTION');
+
         const production = await tx
           .insertInto('production')
           .values({
             date: input.date,
+            doc_number: docNumber,
             branch_id: branchId,
             pid: input.pid,
             qty: input.qty,

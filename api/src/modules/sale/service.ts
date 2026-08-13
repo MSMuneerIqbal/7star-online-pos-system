@@ -14,6 +14,7 @@
 import { db, withTransaction, type Tx } from '../../core/db/index.js';
 import { add, gt, money, mul, sub, type MoneyString } from '../../core/money.js';
 import { badRequest, notFound, unprocessable } from '../../core/errors.js';
+import { issueDocumentNumber } from '../../core/numbering.js';
 import { formatInvoiceAudit, writeAudit } from '../../core/audit.js';
 import { assertBranchAccess, resolveBranchId, type Principal } from '../../core/rbac.js';
 import { VTYPE, WALK_IN_CUSTOMER_ID } from '../../accounting/accounts.js';
@@ -304,10 +305,17 @@ export async function createSale(principal: Principal, input: SaleInput): Promis
         ? await upsertWalkIn(tx, branchId, input.walkIn, null)
         : null;
 
+    const { docNumber } = await issueDocumentNumber(
+      tx,
+      branchId,
+      input.custId === WALK_IN_CUSTOMER_ID ? 'SALE_WALKIN' : 'SALE_CREDIT',
+    );
+
     const sale = await tx
       .insertInto('sale')
       .values({
         date: input.date,
+        doc_number: docNumber,
         cust_id: input.custId,
         sale_cust_id: saleCustId,
         branch_id: branchId,

@@ -5,6 +5,7 @@ import { Loader2, Printer } from 'lucide-react';
 import { api } from '@/lib/api';
 import { fmtMoney } from '@/lib/money';
 import { cn } from '@/lib/cn';
+import { DocumentHeader, type DocumentHeaderBranch } from '@/components/print/DocumentHeader';
 
 interface PrintLine {
   pname: string;
@@ -24,15 +25,16 @@ interface PrintTotal {
 interface PrintDoc {
   kind: string;
   title: string;
-  number: number;
+  number: string;
   date: string;
   company: { name: string; phone: string | null; address: string | null; email: string | null };
-  branch: { name: string; address: string | null };
+  branch: DocumentHeaderBranch;
   partyLabel: string;
   party: { name: string; phone: string | null; address: string | null };
   lines: PrintLine[];
   totals: PrintTotal[];
   notes: string | null;
+  amountInWords: string | null;
 }
 
 /** Which API path serves each printable document type. */
@@ -100,28 +102,7 @@ export function PrintDocumentPage() {
         </button>
       </div>
 
-      {/* Company header */}
-      <header className="mb-4 border-b-2 border-slate-800 pb-3">
-        <div className="flex items-start justify-between gap-6">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">{data.company.name}</h1>
-            {data.company.address && (
-              <p className="text-xs text-slate-600">{data.company.address}</p>
-            )}
-            <p className="text-xs text-slate-600">
-              {[data.company.phone, data.company.email].filter(Boolean).join('  •  ')}
-            </p>
-          </div>
-
-          <div className="text-right">
-            <h2 className="text-base font-semibold uppercase">{data.title}</h2>
-            <p className="text-sm tabular">
-              No. <strong>{data.number}</strong>
-            </p>
-            <p className="text-xs text-slate-600 tabular">{data.date}</p>
-          </div>
-        </div>
-      </header>
+      <DocumentHeader title={data.title} number={data.number} date={data.date} branch={data.branch} />
 
       {/* Party + branch */}
       <section className="mb-4 flex justify-between gap-8 text-sm">
@@ -143,29 +124,29 @@ export function PrintDocumentPage() {
         </div>
       </section>
 
-      {/* Line items */}
+      {/* Line items — full-grid borders */}
       <table className="w-full border-collapse text-sm">
         <thead>
-          <tr className="border-y border-slate-300 bg-slate-50 text-xs uppercase print:bg-transparent">
-            <th scope="col" className="w-8 py-1.5 text-left">
+          <tr className="bg-slate-50 text-xs uppercase print:bg-transparent">
+            <th scope="col" className="w-8 border border-slate-300 py-1.5 text-left">
               #
             </th>
-            <th scope="col" className="py-1.5 text-left">
+            <th scope="col" className="border border-slate-300 py-1.5 text-left">
               Item
             </th>
-            <th scope="col" className="w-20 py-1.5 text-right">
+            <th scope="col" className="w-20 border border-slate-300 py-1.5 text-right">
               Qty
             </th>
-            <th scope="col" className="w-28 py-1.5 text-right">
+            <th scope="col" className="w-28 border border-slate-300 py-1.5 text-right">
               Rate
             </th>
-            <th scope="col" className="w-28 py-1.5 text-right">
+            <th scope="col" className="w-28 border border-slate-300 py-1.5 text-right">
               Total
             </th>
-            <th scope="col" className="w-24 py-1.5 text-right">
+            <th scope="col" className="w-24 border border-slate-300 py-1.5 text-right">
               Disc.
             </th>
-            <th scope="col" className="w-28 py-1.5 text-right">
+            <th scope="col" className="w-28 border border-slate-300 py-1.5 text-right">
               Net
             </th>
           </tr>
@@ -173,14 +154,16 @@ export function PrintDocumentPage() {
 
         <tbody>
           {data.lines.map((l, i) => (
-            <tr key={`${l.pname}-${i}`} className="border-b border-slate-200">
-              <td className="py-1 text-slate-500 tabular">{i + 1}</td>
-              <td className="py-1">{l.pname}</td>
-              <td className="py-1 text-right tabular">{Number(l.qty)}</td>
-              <td className="py-1 text-right tabular">{fmtMoney(l.price)}</td>
-              <td className="py-1 text-right tabular">{fmtMoney(l.total)}</td>
-              <td className="py-1 text-right tabular">{fmtMoney(l.discount)}</td>
-              <td className="py-1 text-right font-medium tabular">{fmtMoney(l.netTotal)}</td>
+            <tr key={`${l.pname}-${i}`}>
+              <td className="border border-slate-200 py-1 text-slate-500 tabular">{i + 1}</td>
+              <td className="border border-slate-200 py-1">{l.pname}</td>
+              <td className="border border-slate-200 py-1 text-right tabular">{Number(l.qty)}</td>
+              <td className="border border-slate-200 py-1 text-right tabular">{fmtMoney(l.price)}</td>
+              <td className="border border-slate-200 py-1 text-right tabular">{fmtMoney(l.total)}</td>
+              <td className="border border-slate-200 py-1 text-right tabular">{fmtMoney(l.discount)}</td>
+              <td className="border border-slate-200 py-1 text-right font-medium tabular">
+                {fmtMoney(l.netTotal)}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -203,6 +186,12 @@ export function PrintDocumentPage() {
           ))}
         </dl>
       </section>
+
+      {data.amountInWords && (
+        <section className="mt-3 border-t border-slate-200 pt-2 text-sm">
+          <strong>Amount in words:</strong> {data.amountInWords}
+        </section>
+      )}
 
       {data.notes && (
         <section className="mt-4 border-t border-slate-200 pt-2 text-xs text-slate-600">

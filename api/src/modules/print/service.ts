@@ -10,6 +10,7 @@
 import { db } from '../../core/db/index.js';
 import { notFound } from '../../core/errors.js';
 import type { Principal } from '../../core/rbac.js';
+import { amountInWords } from './words.js';
 
 export type PrintableKind = 'sale' | 'purchase' | 'sale-return' | 'purchase-return';
 
@@ -39,7 +40,7 @@ export interface PrintDocument {
   kind: PrintableKind;
   /** Shown as the document heading, e.g. "Sale Invoice". */
   title: string;
-  number: number;
+  number: string;
   date: string;
   company: {
     name: string;
@@ -47,12 +48,14 @@ export interface PrintDocument {
     address: string | null;
     email: string | null;
   };
-  branch: { name: string; address: string | null };
+  branch: { name: string; address: string | null; code: string | null; phone: string | null };
   partyLabel: string;
   party: PrintParty;
   lines: PrintLine[];
   totals: PrintTotal[];
   notes: string | null;
+  /** The signed total in words, on customer-signed documents only. */
+  amountInWords: string | null;
 }
 
 const DEFAULT_COMPANY = {
@@ -82,11 +85,16 @@ async function loadCompany(): Promise<PrintDocument['company']> {
 async function loadBranch(branchId: number): Promise<PrintDocument['branch']> {
   const branch = await db
     .selectFrom('branch')
-    .select(['name', 'address'])
+    .select(['name', 'address', 'code', 'phone'])
     .where('id', '=', branchId)
     .executeTakeFirst();
 
-  return { name: branch?.name ?? '', address: branch?.address ?? null };
+  return {
+    name: branch?.name ?? '',
+    address: branch?.address ?? null,
+    code: branch?.code ?? null,
+    phone: branch?.phone ?? null,
+  };
 }
 
 /**
@@ -145,7 +153,7 @@ async function loadSaleReturn(principal: Principal, id: number): Promise<PrintDo
     kind: 'sale-return',
     // Reference the original invoice when the return was raised against one.
     title: doc.sale_id ? `Sale Return — against Invoice ${doc.sale_id}` : 'Sale Return',
-    number: doc.id,
+    number: doc.doc_number,
     date: doc.date,
     company,
     branch,
@@ -171,6 +179,7 @@ async function loadSaleReturn(principal: Principal, id: number): Promise<PrintDo
       { label: 'Balance', value: doc.remaining, emphasis: true },
     ],
     notes: doc.notes,
+    amountInWords: amountInWords(doc.net_total),
   };
 }
 
@@ -218,7 +227,7 @@ async function loadPurchaseReturn(principal: Principal, id: number): Promise<Pri
   return {
     kind: 'purchase-return',
     title: 'Purchase Return',
-    number: doc.id,
+    number: doc.doc_number,
     date: doc.date,
     company,
     branch,
@@ -238,6 +247,7 @@ async function loadPurchaseReturn(principal: Principal, id: number): Promise<Pri
     })),
     totals,
     notes: doc.notes,
+    amountInWords: null,
   };
 }
 
@@ -295,7 +305,7 @@ async function loadSale(principal: Principal, id: number): Promise<PrintDocument
   return {
     kind: 'sale',
     title: 'Sale Invoice',
-    number: sale.id,
+    number: sale.doc_number,
     date: sale.date,
     company,
     branch,
@@ -311,6 +321,7 @@ async function loadSale(principal: Principal, id: number): Promise<PrintDocument
     })),
     totals,
     notes: sale.notes,
+    amountInWords: amountInWords(sale.net_total),
   };
 }
 
@@ -358,7 +369,7 @@ async function loadPurchase(principal: Principal, id: number): Promise<PrintDocu
   return {
     kind: 'purchase',
     title: 'Purchase Invoice',
-    number: purchase.id,
+    number: purchase.doc_number,
     date: purchase.date,
     company,
     branch,
@@ -378,5 +389,6 @@ async function loadPurchase(principal: Principal, id: number): Promise<PrintDocu
     })),
     totals,
     notes: purchase.notes,
+    amountInWords: null,
   };
 }

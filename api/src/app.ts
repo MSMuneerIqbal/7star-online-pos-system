@@ -13,7 +13,7 @@ import saleRoutes from './modules/sale/routes.js';
 import purchaseRoutes from './modules/purchase/routes.js';
 import saleReturnRoutes from './modules/sale-return/routes.js';
 import purchaseReturnRoutes from './modules/purchase-return/routes.js';
-import leaseSaleRoutes from './modules/lease-sale/routes.js';
+import holdSaleRoutes from './modules/hold-sale/routes.js';
 import accountRoutes from './modules/accounts/routes.js';
 import voucherRoutes from './modules/voucher/routes.js';
 import ledgerRoutes from './modules/ledger/routes.js';
@@ -23,6 +23,7 @@ import productionRoutes from './modules/production/routes.js';
 import adminRoutes from './modules/admin/routes.js';
 import labRoutes from './modules/lab/routes.js';
 import catalogRoutes from './modules/catalog/routes.js';
+import branchProductRoutes from './modules/branch-product/routes.js';
 import partyRoutes from './modules/parties/routes.js';
 
 declare module 'fastify' {
@@ -89,7 +90,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(purchaseRoutes, { prefix: '/api/v1/purchases' });
   await app.register(saleReturnRoutes, { prefix: '/api/v1/sale-returns' });
   await app.register(purchaseReturnRoutes, { prefix: '/api/v1/purchase-returns' });
-  await app.register(leaseSaleRoutes, { prefix: '/api/v1/lease-sales' });
+  await app.register(holdSaleRoutes, { prefix: '/api/v1/hold-sales' });
   await app.register(accountRoutes, { prefix: '/api/v1/accounts' });
   await app.register(voucherRoutes, { prefix: '/api/v1/vouchers' });
   await app.register(ledgerRoutes, { prefix: '/api/v1/ledger' });
@@ -100,6 +101,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(labRoutes, { prefix: '/api/v1/lab' });
   // Registration screens share the /api/v1 root, one path segment each.
   await app.register(catalogRoutes, { prefix: '/api/v1' });
+  await app.register(branchProductRoutes, { prefix: '/api/v1/branch-products' });
   await app.register(partyRoutes, { prefix: '/api/v1' });
 
   // Remaining feature modules land here as phases 4-10 land:

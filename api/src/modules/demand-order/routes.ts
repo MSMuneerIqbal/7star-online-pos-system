@@ -47,17 +47,19 @@ export default async function demandOrderRoutes(app: FastifyInstance): Promise<v
       const { kind } = kindParam.parse(req.params);
       const stockKind = toKind(kind);
 
+      // A demand order moves stock at the warehouse's own cost, never a
+      // branch's selling price, so the picker only needs id/name.
       const products =
         stockKind === 'RAW'
           ? await db
               .selectFrom('raw_product')
-              .select(['id', 'name', 'price as sale_price'])
+              .select(['id', 'name'])
               .where('is_active', '=', true)
               .orderBy('name')
               .execute()
           : await db
               .selectFrom('product')
-              .select(['id', 'name', 'price as sale_price'])
+              .select(['id', 'name'])
               .where('is_active', '=', true)
               .orderBy('name')
               .execute();
@@ -89,7 +91,7 @@ export default async function demandOrderRoutes(app: FastifyInstance): Promise<v
 
       const [rows, count] = await Promise.all([
         base
-          .select(['id', 'date', 'from_branch', 'to_branch', 'status', 'gross', 'note'])
+          .select(['id', 'doc_number', 'date', 'from_branch', 'to_branch', 'status', 'gross', 'note'])
           .orderBy('date', 'desc')
           .orderBy('id', 'desc')
           .limit(q.pageSize)

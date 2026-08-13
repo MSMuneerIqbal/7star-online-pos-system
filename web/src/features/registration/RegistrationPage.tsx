@@ -45,6 +45,12 @@ export interface RegistrationConfig {
   optionsEndpoint?: string;
   /** Mint an accounts code on create — shown as a hint in the form. */
   mintsAccount?: boolean;
+  /**
+   * This row is company-wide, not owned by a branch — skip the super-admin
+   * branch picker entirely. Set by the master catalog (Phase 1, the catalog
+   * split): a product model belongs to no branch, only its price does.
+   */
+  noBranchScope?: boolean;
 }
 
 interface Paged<T> {
@@ -156,17 +162,20 @@ export const RAW_PRODUCT: RegistrationConfig = {
 export const PRODUCT: RegistrationConfig = {
   endpoint: 'products',
   title: 'Finish Product',
-  subtitle: 'Goods sold to customers',
+  subtitle: 'The master catalog — one model, company-wide. Branch price and stock live under My Prices.',
   singular: 'Product',
   optionsEndpoint: 'catalog-options',
+  // A model belongs to no branch, only its price does (Phase 1, the catalog
+  // split) — super-admin-only writes, no branch picker.
+  noBranchScope: true,
   permissions: { formId: 6, create: 2052, edit: 2053, remove: 2056 },
   columns: [
     { key: 'id', header: 'ID', numeric: true, width: '4rem' },
     { key: 'name', header: 'Name' },
     { key: 'brand_name', header: 'Brand', cell: text('brand_name') },
+    { key: 'type', header: 'Type', cell: text('type') },
+    { key: 'placement', header: 'Placement', cell: text('placement') },
     { key: 'price', header: 'Cost', numeric: true, cell: money('price') },
-    { key: 'sale_price', header: 'Sale price', numeric: true, cell: money('sale_price') },
-    { key: 'reorder_level', header: 'Reorder at', numeric: true },
     { key: 'is_active', header: 'Status', width: '7rem', cell: yesNo('is_active') },
   ],
   fields: [
@@ -178,11 +187,26 @@ export const PRODUCT: RegistrationConfig = {
       kind: 'money',
       half: true,
       default: '0',
-      hint: 'Drives COGS on every sale — changing it affects future margins.',
+      hint: 'Company cost — drives COGS on every sale. Never shown to a branch.',
     },
-    { name: 'salePrice', label: 'Sale price', kind: 'money', half: true, default: '0' },
-    { name: 'leastPrice', label: 'Minimum price', kind: 'money', half: true, default: '0' },
-    { name: 'reorderLevel', label: 'Reorder level', kind: 'number', half: true, default: '0' },
+    { name: 'type', label: 'Type', kind: 'select', optionsKey: 'types', half: true, default: 'NEW' },
+    {
+      name: 'placement',
+      label: 'Placement',
+      kind: 'select',
+      optionsKey: 'placements',
+      half: true,
+      default: 'INT',
+    },
+    {
+      name: 'cellTypeId',
+      label: 'Suggested cell',
+      kind: 'select',
+      optionsKey: 'cellTypes',
+      half: true,
+      hint: 'Pre-fills the production cart. Never enforced.',
+    },
+    { name: 'cellCount', label: 'Cell count', kind: 'number', half: true },
     { name: 'brandId', label: 'Brand', kind: 'select', optionsKey: 'brands', half: true },
     { name: 'categoryId', label: 'Category', kind: 'select', optionsKey: 'categories', half: true },
     { name: 'unitOfMeasure', label: 'Unit', half: true },
@@ -280,13 +304,6 @@ export const EMPLOYEE: RegistrationConfig = {
     { name: 'phone', label: 'Phone', half: true },
     { name: 'mobile', label: 'Mobile', half: true },
     { name: 'basicSalary', label: 'Basic salary', kind: 'money', half: true, default: '0' },
-    {
-      name: 'departmentId',
-      label: 'Department',
-      kind: 'select',
-      optionsKey: 'departments',
-      half: true,
-    },
     { name: 'city', label: 'City', half: true },
     { name: 'joinDate', label: 'Join date', kind: 'date', half: true },
   ],
@@ -305,7 +322,7 @@ export function RegistrationPage({ config }: { config: RegistrationConfig }) {
   const [form, setForm] = useState<Record<string, unknown>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  const needsBranch = (user?.isSuperAdmin ?? false) && !editing;
+  const needsBranch = (user?.isSuperAdmin ?? false) && !editing && !config.noBranchScope;
 
   const params = new URLSearchParams({ page: String(page), pageSize: '20' });
   if (search) params.set('search', search);

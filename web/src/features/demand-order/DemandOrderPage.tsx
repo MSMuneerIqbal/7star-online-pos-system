@@ -38,7 +38,7 @@ interface Branch {
 }
 
 interface FormData {
-  products: { id: number; name: string | null; sale_price: string }[];
+  products: { id: number; name: string | null }[];
   branches: Branch[];
   kind: string;
 }
@@ -52,6 +52,8 @@ interface Paged<T> {
 
 interface OrderRow {
   id: number;
+  /** Only present on the orders list — requests and receipts stay on raw id. */
+  doc_number?: string;
   date: string;
   from_branch: number;
   to_branch: number;
@@ -142,7 +144,22 @@ export function DemandOrderPage({ kind }: { kind: StockKind }) {
 
   const perms = PERMS[kind][tab];
 
-  const commonColumns: readonly Column<OrderRow & RequestRow>[] = [
+  const orderColumns: readonly Column<OrderRow>[] = [
+    { key: 'doc_number', header: 'No.', width: '6rem' },
+    { key: 'date', header: 'Date', width: '7.5rem' },
+    { key: 'from_branch', header: 'From', cell: (r) => branchName(r.from_branch) },
+    {
+      key: 'arrow',
+      header: '',
+      width: '2rem',
+      cell: () => <ArrowRight className="size-3 text-slate-400" />,
+    },
+    { key: 'to_branch', header: 'To', cell: (r) => branchName(r.to_branch) },
+    { key: 'gross', header: 'Value', numeric: true, cell: (r) => fmtMoney(r.gross) },
+    { key: 'status', header: 'Status', width: '8rem', cell: (r) => <StatusChip status={r.status} /> },
+  ];
+
+  const requestColumns: readonly Column<RequestRow>[] = [
     { key: 'id', header: 'No.', numeric: true, width: '4.5rem' },
     { key: 'date', header: 'Date', width: '7.5rem' },
     { key: 'from_branch', header: 'From', cell: (r) => branchName(r.from_branch) },
@@ -244,7 +261,7 @@ export function DemandOrderPage({ kind }: { kind: StockKind }) {
         />
       ) : (
         <DataTable
-          columns={commonColumns}
+          columns={tab === 'orders' ? orderColumns : requestColumns}
           rows={list.data?.rows ?? []}
           rowKey={(r) => r.id}
           loading={list.isPending}
@@ -408,7 +425,7 @@ function TransferComposer({
   kind: StockKind;
   mode: 'order' | 'request';
   branches: Branch[];
-  products: { id: number; name: string | null; sale_price: string }[];
+  products: { id: number; name: string | null }[];
   onDone: () => void;
 }) {
   const queryClient = useQueryClient();

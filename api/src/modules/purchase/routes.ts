@@ -66,6 +66,7 @@ export default async function purchaseRoutes(app: FastifyInstance): Promise<void
         base
           .select([
             'purchase.id',
+            'purchase.doc_number',
             'purchase.date',
             'purchase.net_total',
             'purchase.paid',
@@ -105,7 +106,7 @@ export default async function purchaseRoutes(app: FastifyInstance): Promise<void
         // Purchases consume raw materials, not finished goods.
         db
           .selectFrom('raw_product')
-          .select(['id', 'name', 'price as sale_price'])
+          .select(['id', 'name', 'price as sellingPrice'])
           .where('is_active', '=', true)
           .orderBy('name')
           .execute(),

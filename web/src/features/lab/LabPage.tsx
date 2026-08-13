@@ -19,6 +19,7 @@ interface Paged<T> {
 
 interface Job {
   id: number;
+  doc_number: string;
   date: string;
   status: string | null;
   gross: string;
@@ -85,7 +86,7 @@ export function LabPage() {
   });
 
   const columns: readonly Column<Job>[] = [
-    { key: 'id', header: 'Job', numeric: true, width: '4.5rem' },
+    { key: 'doc_number', header: 'Job', width: '6rem' },
     { key: 'date', header: 'Date', width: '7.5rem' },
     { key: 'customer_name', header: 'Customer', cell: (r) => r.customer_name ?? '—' },
     { key: 'customer_phone', header: 'Phone', width: '9rem', cell: (r) => r.customer_phone ?? '—' },

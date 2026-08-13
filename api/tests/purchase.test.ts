@@ -199,6 +199,7 @@ describe('purchase posting', () => {
         .insertInto('purchase')
         .values({
           date: '2026-03-05',
+          doc_number: 'T9200-PI-1',
           sup_id: supId,
           branch_id: BRANCH,
           gross_total: t.subTotal,

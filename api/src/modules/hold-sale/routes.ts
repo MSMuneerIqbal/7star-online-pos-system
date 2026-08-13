@@ -1,5 +1,7 @@
 /**
- * Hold (lease) sale. Legacy form id 51, form code 403.
+ * Hold Sale. Legacy form id 51, form code 403.
+ * (Reconstructed schema/module name was "lease_sale"; renamed in Phase 0
+ * groundwork — this was always Hold Sale, PLAN.md §0/§16.)
  *
  * A parked basket — goods set aside for a customer who has not paid. There is
  * NO ledger posting: nothing has been sold, so nothing is recognised. Value is
@@ -13,6 +15,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { db, withTransaction } from '../../core/db/index.js';
 import { conflict, notFound } from '../../core/errors.js';
+import { issueDocumentNumber } from '../../core/numbering.js';
 import { writeAudit } from '../../core/audit.js';
 import { assertBranchAccess, resolveBranchId } from '../../core/rbac.js';
 import { formPermissions, likeTerm, listQuery, offset, paged } from '../../core/crud.js';
@@ -39,7 +42,7 @@ const holdBody = z.object({
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
-export default async function leaseSaleRoutes(app: FastifyInstance): Promise<void> {
+export default async function holdSaleRoutes(app: FastifyInstance): Promise<void> {
   app.get('/', {
     preHandler: app.requireAction(PERM.formId, PERM.view),
     handler: async (req) => {
@@ -47,16 +50,16 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
       const { status } = z.object({ status: z.string().optional() }).parse(req.query);
 
       let base = db
-        .selectFrom('lease_sale')
-        .leftJoin('customer', 'customer.id', 'lease_sale.cust_id');
+        .selectFrom('hold_sale')
+        .leftJoin('customer', 'customer.id', 'hold_sale.cust_id');
 
       if (!req.principal.isSuperAdmin) {
-        base = base.where('lease_sale.branch_id', '=', req.principal.branchId);
+        base = base.where('hold_sale.branch_id', '=', req.principal.branchId);
       } else if (q.branchId !== undefined) {
-        base = base.where('lease_sale.branch_id', '=', q.branchId);
+        base = base.where('hold_sale.branch_id', '=', q.branchId);
       }
 
-      if (status) base = base.where('lease_sale.status', '=', status);
+      if (status) base = base.where('hold_sale.status', '=', status);
 
       const term = likeTerm(q.search);
       if (term) base = base.where('customer.name', 'ilike', term);
@@ -64,14 +67,15 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
       const [rows, count] = await Promise.all([
         base
           .select([
-            'lease_sale.id',
-            'lease_sale.date',
-            'lease_sale.status',
-            'lease_sale.note',
+            'hold_sale.id',
+            'hold_sale.doc_number',
+            'hold_sale.date',
+            'hold_sale.status',
+            'hold_sale.note',
             'customer.name as customer_name',
           ])
-          .orderBy('lease_sale.date', 'desc')
-          .orderBy('lease_sale.id', 'desc')
+          .orderBy('hold_sale.date', 'desc')
+          .orderBy('hold_sale.id', 'desc')
           .limit(q.pageSize)
           .offset(offset(q))
           .execute(),
@@ -95,12 +99,13 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
 
       if (!isSuper) customers = customers.where('branch_id', '=', branchId);
 
-      let products = db
+      // No prices: a hold records what is set aside, not what it is worth
+      // (see the module header). Product is company-wide since the catalog
+      // split, so there is no branch filter to apply here either.
+      const products = db
         .selectFrom('product')
-        .select(['id', 'name', 'sale_price'])
+        .select(['id', 'name'])
         .where('is_active', '=', true);
-
-      if (!isSuper) products = products.where('branch_id', '=', branchId);
 
       let branches = db.selectFrom('branch').select(['id', 'name']).where('id', '>', 0);
       if (!isSuper) branches = branches.where('id', '=', branchId);
@@ -121,7 +126,7 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
       const { id } = idParam.parse(req.params);
 
       const hold = await db
-        .selectFrom('lease_sale')
+        .selectFrom('hold_sale')
         .selectAll()
         .where('id', '=', id)
         .executeTakeFirst();
@@ -133,7 +138,7 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
       }
 
       const lines = await db
-        .selectFrom('lease_sale_detail')
+        .selectFrom('hold_sale_detail')
         .selectAll()
         .where('sale_id', '=', id)
         .orderBy('id')
@@ -165,10 +170,13 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
 
         const names = new Map(products.map((p) => [p.id, p.name]));
 
+        const { docNumber } = await issueDocumentNumber(tx, branchId, 'HOLD_SALE');
+
         const hold = await tx
-          .insertInto('lease_sale')
+          .insertInto('hold_sale')
           .values({
             date: body.date,
+            doc_number: docNumber,
             cust_id: body.custId,
             branch_id: branchId,
             status: STATUS.HELD,
@@ -180,7 +188,7 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
           .executeTakeFirstOrThrow();
 
         await tx
-          .insertInto('lease_sale_detail')
+          .insertInto('hold_sale_detail')
           .values(
             body.lines.map((l) => ({
               sale_id: hold.id,
@@ -222,7 +230,7 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
       const { id } = idParam.parse(req.params);
 
       const hold = await db
-        .selectFrom('lease_sale')
+        .selectFrom('hold_sale')
         .select(['id', 'branch_id', 'status'])
         .where('id', '=', id)
         .executeTakeFirst();
@@ -239,7 +247,7 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
 
       await withTransaction(async (tx) => {
         await tx
-          .updateTable('lease_sale')
+          .updateTable('hold_sale')
           .set({
             status: STATUS.CANCELLED,
             updated_at: new Date(),
@@ -249,7 +257,7 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
           .execute();
 
         await tx
-          .updateTable('lease_sale_detail')
+          .updateTable('hold_sale_detail')
           .set({ status: STATUS.CANCELLED })
           .where('sale_id', '=', id)
           .execute();
@@ -284,7 +292,7 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
       const { saleId } = z.object({ saleId: z.coerce.number().int().positive() }).parse(req.body);
 
       const hold = await db
-        .selectFrom('lease_sale')
+        .selectFrom('hold_sale')
         .select(['id', 'branch_id', 'status'])
         .where('id', '=', id)
         .executeTakeFirst();
@@ -306,7 +314,7 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
 
       await withTransaction(async (tx) => {
         await tx
-          .updateTable('lease_sale')
+          .updateTable('hold_sale')
           .set({
             status: STATUS.CONVERTED,
             updated_at: new Date(),
@@ -316,7 +324,7 @@ export default async function leaseSaleRoutes(app: FastifyInstance): Promise<voi
           .execute();
 
         await tx
-          .updateTable('lease_sale_detail')
+          .updateTable('hold_sale_detail')
           .set({ status: STATUS.CONVERTED })
           .where('sale_id', '=', id)
           .execute();

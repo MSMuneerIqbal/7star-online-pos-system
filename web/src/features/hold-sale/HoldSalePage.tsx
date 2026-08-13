@@ -12,6 +12,7 @@ import { emptyLine, type InvoiceLine } from '@/components/invoice/useInvoiceLine
 
 interface HoldRow {
   id: number;
+  doc_number: string;
   date: string;
   status: string | null;
   note: string | null;
@@ -20,7 +21,7 @@ interface HoldRow {
 
 interface FormData {
   customers: { id: number; name: string | null; phone: string | null }[];
-  products: { id: number; name: string | null; sale_price: string }[];
+  products: { id: number; name: string | null }[];
   branches: { id: number; name: string }[];
 }
 
@@ -43,7 +44,7 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 /**
- * Hold ("lease") sale — goods set aside for a customer who has not paid.
+ * Hold Sale — goods set aside for a customer who has not paid.
  *
  * Carries no money and posts nothing to the ledger, so there is no totals
  * panel: only items and quantities. Value is recognised when the hold is
@@ -59,26 +60,26 @@ export function HoldSalePage() {
   const [saleId, setSaleId] = useState('');
 
   const list = useQuery({
-    queryKey: ['lease-sales', page],
-    queryFn: () => api.get<Paged<HoldRow>>(`/lease-sales?page=${page}&pageSize=20`),
+    queryKey: ['hold-sales', page],
+    queryFn: () => api.get<Paged<HoldRow>>(`/hold-sales?page=${page}&pageSize=20`),
     enabled: !composing,
   });
 
   const cancel = useMutation({
-    mutationFn: (row: HoldRow) => api.post(`/lease-sales/${row.id}/cancel`),
+    mutationFn: (row: HoldRow) => api.post(`/hold-sales/${row.id}/cancel`),
     onSuccess: () => {
       toast.success('Hold released');
-      void queryClient.invalidateQueries({ queryKey: ['lease-sales'] });
+      void queryClient.invalidateQueries({ queryKey: ['hold-sales'] });
     },
     onError: (err) =>
       toast.error(err instanceof ApiError ? err.message : 'Could not release the hold'),
   });
 
   const convert = useMutation({
-    mutationFn: () => api.post(`/lease-sales/${converting?.id}/convert`, { saleId: Number(saleId) }),
+    mutationFn: () => api.post(`/hold-sales/${converting?.id}/convert`, { saleId: Number(saleId) }),
     onSuccess: () => {
       toast.success('Hold marked as converted');
-      void queryClient.invalidateQueries({ queryKey: ['lease-sales'] });
+      void queryClient.invalidateQueries({ queryKey: ['hold-sales'] });
       setConverting(null);
       setSaleId('');
     },
@@ -89,7 +90,7 @@ export function HoldSalePage() {
   const canEdit = hasAction(PERM.formId, PERM.edit);
 
   const columns: readonly Column<HoldRow>[] = [
-    { key: 'id', header: 'Hold', numeric: true, width: '5rem' },
+    { key: 'doc_number', header: 'Hold', width: '6rem' },
     { key: 'date', header: 'Date', width: '8rem' },
     { key: 'customer_name', header: 'Customer', cell: (r) => r.customer_name ?? '—' },
     {
@@ -225,8 +226,8 @@ function HoldComposer({ onDone }: { onDone: () => void }) {
   const needsBranch = user?.isSuperAdmin ?? false;
 
   const formData = useQuery({
-    queryKey: ['lease-sales', 'form-data'],
-    queryFn: () => api.get<FormData>('/lease-sales/form-data'),
+    queryKey: ['hold-sales', 'form-data'],
+    queryFn: () => api.get<FormData>('/hold-sales/form-data'),
   });
 
   const validLines = lines.filter((l) => l.pid !== null && Number(l.qty) > 0);
@@ -237,7 +238,7 @@ function HoldComposer({ onDone }: { onDone: () => void }) {
 
   const save = useMutation({
     mutationFn: () =>
-      api.post<{ id: number }>('/lease-sales', {
+      api.post<{ id: number }>('/hold-sales', {
         date,
         custId,
         ...(branchId !== null ? { branchId } : {}),
@@ -246,7 +247,7 @@ function HoldComposer({ onDone }: { onDone: () => void }) {
       }),
     onSuccess: (result) => {
       toast.success(`Hold #${result.id} created`);
-      void queryClient.invalidateQueries({ queryKey: ['lease-sales'] });
+      void queryClient.invalidateQueries({ queryKey: ['hold-sales'] });
       onDone();
     },
     onError: (err) =>

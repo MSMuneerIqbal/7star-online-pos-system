@@ -18,6 +18,7 @@
 import { db, withTransaction, type Tx } from '../../core/db/index.js';
 import { add, gt, money, mul, sub, type MoneyString } from '../../core/money.js';
 import { badRequest, notFound, unprocessable } from '../../core/errors.js';
+import { issueDocumentNumber } from '../../core/numbering.js';
 import { formatInvoiceAudit, writeAudit } from '../../core/audit.js';
 import { assertBranchAccess, resolveBranchId, type Principal } from '../../core/rbac.js';
 import { VTYPE } from '../../accounting/accounts.js';
@@ -237,10 +238,13 @@ export async function createPurchase(
     const totals = await computeTotals(input, tx);
     const supplier = await resolveSupplier(input.supId, tx);
 
+    const { docNumber } = await issueDocumentNumber(tx, branchId, 'PURCHASE');
+
     const purchase = await tx
       .insertInto('purchase')
       .values({
         date: input.date,
+        doc_number: docNumber,
         sup_id: input.supId,
         branch_id: branchId,
         gross_total: totals.subTotal,

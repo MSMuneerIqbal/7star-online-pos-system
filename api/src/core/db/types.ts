@@ -26,10 +26,25 @@ type Defaulted<T> = ColumnType<T, T | undefined, T>;
 // Organisation
 // ---------------------------------------------------------------------------
 
+export type BranchType = 'BRANCH' | 'WAREHOUSE';
+
 export interface BranchTable {
   id: Generated<number>;
   name: string;
+  /**
+   * Prefixes every document this branch issues — `MUL-1`, `MUL-DP-1`.
+   * Immutable once used. Null only on branch 0, the "All Branches" sentinel,
+   * which never issues a document.
+   */
+  code: string | null;
+  /** Exactly one branch is the WAREHOUSE, enforced by a partial unique index. */
+  type: Defaulted<BranchType>;
   address: string | null;
+  phone: string | null;
+  opening_hours: string | null;
+  closing_day: string | null;
+  /** Deactivating hides a branch without deleting its history. */
+  is_active: Defaulted<boolean>;
   longitude: Numeric;
   latitude: Numeric;
   created_at: CreatedAt;
@@ -85,7 +100,6 @@ export interface EmployeeTable {
   branch_id: number;
   /** Salary-expense account, so payroll can be posted against the employee. */
   account_no: number;
-  department_id: number | null;
   dob: ColumnType<string, string | null, string | null> | null;
   join_date: ColumnType<string, string | null, string | null> | null;
   created_at: CreatedAt;
@@ -333,35 +347,61 @@ export interface CategoryTable {
   updated_by: Defaulted<number>;
 }
 
-export interface DepartmentTable {
-  id: Generated<number>;
-  name: string;
-}
+export type ProductType = 'NEW' | 'BRANDED' | 'CHARGER' | 'STORAGE' | 'OTHER';
+export type ProductPlacement = 'INT' | 'EXT';
 
+/**
+ * The master catalog row — one per model, company-wide. Branch-specific
+ * price, location and threshold live on `branch_product` instead (Phase 1,
+ * the catalog split). Identity is model + brand + type + placement, matched
+ * case-insensitively by `idx_product_identity`.
+ */
 export interface ProductTable {
   id: Generated<number>;
   name: string | null;
   other_name: string | null;
-  /** Cost price — drives COGS on every sale. */
+  /**
+   * Company cost. Production cost for what the warehouse makes, purchase
+   * cost for what it buys in. Never shown to a branch.
+   */
   price: Numeric;
-  sale_price: Numeric;
-  least_price: Numeric;
   open_qty: Numeric;
   company_id: number;
   brand_id: number | null;
   category_id: number | null;
   unit_of_measure: string | null;
   company_barcode: string | null;
-  reorder_level: number;
   brand_discount: Numeric;
-  shelf_number: number;
-  image_path: Buffer | null;
-  branch_id: number;
+  /** A path under UPLOAD_DIR, not the file itself. No upload endpoint yet. */
+  image_path: string | null;
+  type: Defaulted<ProductType>;
+  placement: Defaulted<ProductPlacement>;
+  /** The suggested recipe. Pre-fills the production cart; never enforced. */
+  cell_type_id: number | null;
+  cell_count: number | null;
   is_active: boolean;
   created_at: CreatedAt;
   updated_at: CreatedAt;
   created_by: number;
   updated_by: number;
+}
+
+/** One row per product per branch — price, location and threshold. */
+export interface BranchProductTable {
+  id: Generated<number>;
+  branch_id: number;
+  product_id: number;
+  selling_price: Numeric;
+  minimum_price: Numeric;
+  /** Weighted average of what this branch has been charged. Written only by confirmed receipt (Phase 5) — never typed at the till. */
+  wholesale_cost: Numeric;
+  location: string | null;
+  low_stock_threshold: Numeric;
+  is_active: Defaulted<boolean>;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
 }
 
 export interface CustomerTable {
@@ -450,6 +490,8 @@ export interface SupplierTable {
 export interface PurchaseTable {
   id: Generated<number>;
   date: ColumnType<string, string, string>;
+  /** Branch-prefixed document number, e.g. `MUL-PI-1`. */
+  doc_number: string;
   sup_id: number;
   branch_id: number;
   gross_total: Numeric;
@@ -487,6 +529,8 @@ export interface PurchaseDetailTable {
 export interface SaleTable {
   id: Generated<number>;
   date: ColumnType<string, string, string>;
+  /** Branch-prefixed document number, e.g. `MUL-1` (walk-in) or `MUL-C-1`. */
+  doc_number: string;
   cust_id: number;
   sale_cust_id: number | null;
   branch_id: number;
@@ -524,6 +568,8 @@ export interface SaleDetailTable {
 export interface SaleReturnTable {
   id: Generated<number>;
   date: ColumnType<string, string, string>;
+  /** Branch-prefixed document number, e.g. `MUL-SR-1`. */
+  doc_number: string;
   /** Original invoice, when the return references one. */
   sale_id: number | null;
   cust_id: number;
@@ -561,6 +607,8 @@ export interface SaleReturnDetailTable {
 export interface PurchaseReturnTable {
   id: Generated<number>;
   date: ColumnType<string, string, string>;
+  /** Branch-prefixed document number, e.g. `MUL-PR-1`. */
+  doc_number: string;
   sup_id: number;
   branch_id: number;
   gross_total: Numeric;
@@ -593,12 +641,14 @@ export interface PurchaseReturnDetailTable {
 }
 
 /**
- * Held ("lease") sale — a parked basket. No ledger impact: nothing is sold
- * until it is converted into a real sale.
+ * Hold Sale — a parked basket. No ledger impact: nothing is sold until it is
+ * converted into a real sale.
  */
-export interface LeaseSaleTable {
+export interface HoldSaleTable {
   id: Generated<number>;
   date: ColumnType<string, string, string>;
+  /** Branch-prefixed document number, e.g. `MUL-H-1`. */
+  doc_number: string;
   branch_id: number;
   cust_id: number;
   status: string | null;
@@ -609,7 +659,7 @@ export interface LeaseSaleTable {
   updated_by: number;
 }
 
-export interface LeaseSaleDetailTable {
+export interface HoldSaleDetailTable {
   id: Generated<number>;
   sale_id: number;
   pid: number;
@@ -628,6 +678,8 @@ export interface LeaseSaleDetailTable {
 export interface DemandOrderTable {
   id: Generated<number>;
   date: ColumnType<string, string, string>;
+  /** Branch-prefixed document number against the requesting branch, e.g. `MUL-DO-1`. */
+  doc_number: string;
   from_branch: number;
   to_branch: number;
   /** 'RAW' | 'FINISH' */
@@ -720,6 +772,8 @@ export interface DoReceivedDetailTable {
 export interface ProductionTable {
   id: Generated<number>;
   date: ColumnType<string, string, string>;
+  /** Branch-prefixed document number, e.g. `MUL-PRD-1`. */
+  doc_number: string;
   branch_id: number;
   /** The finished product being made. */
   pid: number;
@@ -761,6 +815,8 @@ export interface ProductionDetailTable {
 export interface LabReceivedTable {
   id: Generated<number>;
   date: ColumnType<string, string, string>;
+  /** Branch-prefixed intake ticket number, e.g. `MUL-LR-1`. */
+  doc_number: string;
   cust_id: number;
   branch_id: number;
   note: string | null;
@@ -792,6 +848,8 @@ export interface LabReceivedDetailTable {
 export interface LabTable {
   id: Generated<number>;
   date: ColumnType<string, string, string>;
+  /** Branch-prefixed document number, e.g. `MUL-LB-1`. */
+  doc_number: string;
   /** The intake this bills. */
   lab_id: number | null;
   branch_id: number;
@@ -829,14 +887,39 @@ export interface LabUsedTable {
 }
 
 // ---------------------------------------------------------------------------
+// Document numbering (phase 2)
+// ---------------------------------------------------------------------------
+
+/** One row per real branch × doc type; the sequence a document number draws from. */
+export interface DocumentCounterTable {
+  branch_id: number;
+  doc_type: string;
+  next_number: number;
+  updated_at: CreatedAt;
+}
+
+/** A successful sign-in. Successes only — see migration 1700000000016. */
+export interface LoginHistoryTable {
+  /** bigint identity — read as a string like user_log.id. */
+  id: Generated<string>;
+  user_id: number;
+  username: string;
+  branch_id: number;
+  ip: string | null;
+  user_agent: string | null;
+  at: CreatedAt;
+}
+
+// ---------------------------------------------------------------------------
 
 export interface Database {
   branch: BranchTable;
   employee: EmployeeTable;
+  document_counter: DocumentCounterTable;
   brand: BrandTable;
   category: CategoryTable;
-  department: DepartmentTable;
   product: ProductTable;
+  branch_product: BranchProductTable;
   customer: CustomerTable;
   sale_customer: SaleCustomerTable;
   sale: SaleTable;
@@ -849,8 +932,8 @@ export interface Database {
   sale_return_detail: SaleReturnDetailTable;
   purchase_return: PurchaseReturnTable;
   purchase_return_detail: PurchaseReturnDetailTable;
-  lease_sale: LeaseSaleTable;
-  lease_sale_detail: LeaseSaleDetailTable;
+  hold_sale: HoldSaleTable;
+  hold_sale_detail: HoldSaleDetailTable;
   demand_order: DemandOrderTable;
   demand_order_detail: DemandOrderDetailTable;
   do_request: DoRequestTable;
@@ -866,6 +949,7 @@ export interface Database {
   lab_used: LabUsedTable;
   setting: SettingTable;
   user_logins: UserLoginsTable;
+  login_history: LoginHistoryTable;
   role: RoleTable;
   form_head: FormHeadTable;
   form: FormTable;
@@ -892,6 +976,7 @@ export type Transaction = Selectable<TransactionsTable>;
 export type NewTransaction = Insertable<TransactionsTable>;
 export type Account = Selectable<AccountTable>;
 export type Product = Selectable<ProductTable>;
+export type BranchProduct = Selectable<BranchProductTable>;
 export type Customer = Selectable<CustomerTable>;
 export type Sale = Selectable<SaleTable>;
 export type SaleDetail = Selectable<SaleDetailTable>;

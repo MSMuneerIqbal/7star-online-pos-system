@@ -32,15 +32,18 @@ const ACCOUNTS = [
 async function seedCatalog(tx: Tx): Promise<{ battery: number; charger: number; custId: number }> {
   await seedLedgerFixtures(tx, { branchId: BRANCH, accountIds: ACCOUNTS });
 
+  // computeTotals only reads product.price (company cost) — sale price is a
+  // branch_product concern the caller supplies per line, same as the route
+  // does today.
   const battery = await tx
     .insertInto('product')
-    .values({ name: 'Battery 12V', price: '4000.00', sale_price: '5500.00', branch_id: BRANCH })
+    .values({ name: 'Battery 12V', price: '4000.00' })
     .returning('id')
     .executeTakeFirstOrThrow();
 
   const charger = await tx
     .insertInto('product')
-    .values({ name: 'Charger', price: '900.00', sale_price: '1200.00', branch_id: BRANCH })
+    .values({ name: 'Charger', price: '900.00' })
     .returning('id')
     .executeTakeFirstOrThrow();
 
@@ -288,6 +291,7 @@ describe('sale posting integration', () => {
         .insertInto('sale')
         .values({
           date: '2026-03-01',
+          doc_number: 'T9100-1',
           cust_id: custId,
           branch_id: BRANCH,
           gross_total: t.grossTotal,

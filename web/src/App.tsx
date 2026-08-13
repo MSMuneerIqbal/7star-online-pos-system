@@ -12,6 +12,7 @@ import { PurchasePage } from '@/features/purchase/PurchasePage';
 import { PrintDocumentPage } from '@/features/print/PrintDocument';
 import { ReturnPage, SALE_RETURN, PURCHASE_RETURN } from '@/features/returns/ReturnPage';
 import { HoldSalePage } from '@/features/hold-sale/HoldSalePage';
+import { BranchProductPage } from '@/features/branch-product/BranchProductPage';
 import { VoucherPage } from '@/features/voucher/VoucherPage';
 import { LedgerPage } from '@/features/ledger/LedgerPage';
 import { TrialBalancePage } from '@/features/ledger/TrialBalancePage';
@@ -42,6 +43,7 @@ import {
   SettingsPage,
   UserLoginsPage,
   UserLogsPage,
+  LoginHistoryPage,
 } from '@/features/admin/AdminPages';
 import { NotBuiltPage } from '@/components/NotBuiltPage';
 import { NAV } from '@/lib/nav';
@@ -59,11 +61,13 @@ const IMPLEMENTED: Record<string, React.ComponentType> = {
   '/suppliers': () => <RegistrationPage config={SUPPLIER} />,
   '/employees': () => <RegistrationPage config={EMPLOYEE} />,
 
+  '/branch-products': BranchProductPage,
+
   '/sales': SalePage,
   '/purchases': PurchasePage,
   '/sale-returns': () => <ReturnPage config={SALE_RETURN} />,
   '/purchase-returns': () => <ReturnPage config={PURCHASE_RETURN} />,
-  '/lease-sales': HoldSalePage,
+  '/hold-sales': HoldSalePage,
 
   // All five vouchers share one component, parameterised by type.
   '/vouchers/cash-receipt': () => <VoucherPage type="CRV" />,
@@ -105,6 +109,7 @@ const IMPLEMENTED: Record<string, React.ComponentType> = {
   '/users/role-assign': RoleAssignPage,
   '/users/logins': UserLoginsPage,
   '/users/logs': UserLogsPage,
+  '/users/login-history': LoginHistoryPage,
   '/settings': SettingsPage,
 };
 

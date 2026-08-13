@@ -64,6 +64,7 @@ export default async function purchaseReturnRoutes(app: FastifyInstance): Promis
         base
           .select([
             'purchase_return.id',
+            'purchase_return.doc_number',
             'purchase_return.date',
             'purchase_return.net_total',
             'purchase_return.received',
@@ -102,7 +103,7 @@ export default async function purchaseReturnRoutes(app: FastifyInstance): Promis
         suppliers.orderBy('name').execute(),
         db
           .selectFrom('raw_product')
-          .select(['id', 'name', 'price as sale_price'])
+          .select(['id', 'name', 'price as sellingPrice'])
           .where('is_active', '=', true)
           .orderBy('name')
           .execute(),

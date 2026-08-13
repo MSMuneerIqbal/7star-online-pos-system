@@ -11,10 +11,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { db, withTransaction } from '../../core/db/index.js';
-import { conflict, notFound } from '../../core/errors.js';
+import { conflict, forbidden, notFound } from '../../core/errors.js';
 import { writeAudit } from '../../core/audit.js';
 import { resolveBranchId } from '../../core/rbac.js';
 import { formPermissions, likeTerm, listQuery, offset, paged } from '../../core/crud.js';
+
+const PRODUCT_TYPES = ['NEW', 'BRANDED', 'CHARGER', 'STORAGE', 'OTHER'] as const;
+const PRODUCT_PLACEMENTS = ['INT', 'EXT'] as const;
 
 const BRAND = formPermissions(3, 202);
 const CATEGORY = formPermissions(4, 203);
@@ -474,7 +477,11 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
   });
 
   // -------------------------------------------------------------------------
-  // Finish Product
+  // Finish Product — the master catalog. One row per model, company-wide
+  // (Phase 1, the catalog split). Branch price/location/threshold live on
+  // `branch_product` instead — see the branch-product module. Writes are
+  // super-admin-only: a branch does not own the model, only its own price
+  // row.
   // -------------------------------------------------------------------------
 
   app.get('/products', {
@@ -486,10 +493,6 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
         .selectFrom('product')
         .leftJoin('brand', 'brand.id', 'product.brand_id')
         .leftJoin('category', 'category.id', 'product.category_id');
-
-      if (!req.principal.isSuperAdmin) {
-        base = base.where('product.branch_id', '=', req.principal.branchId);
-      }
 
       const term = likeTerm(q.search);
       if (term) {
@@ -504,9 +507,10 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
             'product.id',
             'product.name',
             'product.price',
-            'product.sale_price',
-            'product.least_price',
-            'product.reorder_level',
+            'product.type',
+            'product.placement',
+            'product.cell_type_id',
+            'product.cell_count',
             'product.unit_of_measure',
             'product.company_barcode',
             'product.is_active',
@@ -524,7 +528,7 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
     },
   });
 
-  /** Brand and category options for the product and raw-item forms. */
+  /** Brand, category, type, placement and cell-recipe options for the product form. */
   app.get('/catalog-options', {
     preHandler: app.requireAction(PRODUCT.formId, PRODUCT.view),
     handler: async (req) => {
@@ -540,47 +544,96 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
         branches = branches.where('id', '=', req.principal.branchId);
       }
 
-      const [brandRows, categoryRows, branchRows] = await Promise.all([
+      // Phase 3 (raw items) will add a part_type column to tell cells apart
+      // from other raw stock; until then every active raw item is offered as
+      // a candidate recipe.
+      const cellTypes = db
+        .selectFrom('raw_product')
+        .select(['id', 'name'])
+        .where('is_active', '=', true)
+        .orderBy('name');
+
+      const [brandRows, categoryRows, branchRows, cellTypeRows] = await Promise.all([
         brands.orderBy('name').execute(),
         categories.orderBy('name').execute(),
         branches.orderBy('name').execute(),
+        cellTypes.execute(),
       ]);
 
-      return { brands: brandRows, categories: categoryRows, branches: branchRows };
+      return {
+        brands: brandRows,
+        categories: categoryRows,
+        branches: branchRows,
+        types: PRODUCT_TYPES.map((id) => ({ id, name: id.charAt(0) + id.slice(1).toLowerCase() })),
+        placements: [
+          { id: 'INT', name: 'Internal' },
+          { id: 'EXT', name: 'External' },
+        ],
+        cellTypes: cellTypeRows,
+      };
     },
   });
+
+  /**
+   * `idx_product_identity` — model + brand + type + placement, matched
+   * case-insensitively. Mirrors the unique index the catalog-split migration
+   * put on the table, so a clash surfaces here with a readable message
+   * instead of a raw constraint violation.
+   */
+  async function findIdentityClash(
+    name: string,
+    brandId: number | null,
+    type: (typeof PRODUCT_TYPES)[number],
+    placement: (typeof PRODUCT_PLACEMENTS)[number],
+    excludeId?: number,
+  ) {
+    let q = db
+      .selectFrom('product')
+      .select('id')
+      .where('name', 'ilike', name)
+      .where('type', '=', type)
+      .where('placement', '=', placement);
+
+    q = brandId === null ? q.where('brand_id', 'is', null) : q.where('brand_id', '=', brandId);
+    if (excludeId !== undefined) q = q.where('id', '!=', excludeId);
+
+    return q.executeTakeFirst();
+  }
 
   app.post('/products', {
     preHandler: app.requireAction(PRODUCT.formId, PRODUCT.create),
     handler: async (req, reply) => {
+      if (!req.principal.isSuperAdmin) {
+        throw forbidden('Only the super admin can edit the master catalog');
+      }
+
       const body = z
         .object({
           name: z.string().trim().min(1, 'Name is required').max(200),
           otherName: z.string().trim().max(200).nullish(),
           /** Cost price — drives COGS on every sale. */
           price: decimal.default('0'),
-          salePrice: decimal.default('0'),
-          leastPrice: decimal.default('0'),
           brandId: z.coerce.number().int().positive().nullish(),
           categoryId: z.coerce.number().int().positive().nullish(),
           unitOfMeasure: z.string().trim().max(50).nullish(),
           companyBarcode: z.string().trim().max(100).nullish(),
-          reorderLevel: z.coerce.number().int().min(0).default(0),
+          type: z.enum(PRODUCT_TYPES).default('NEW'),
+          placement: z.enum(PRODUCT_PLACEMENTS).default('INT'),
+          cellTypeId: z.coerce.number().int().positive().nullish(),
+          cellCount: z.coerce.number().int().positive().nullish(),
           isActive: z.boolean().default(true),
-          branchId: z.coerce.number().int().optional(),
         })
         .parse(req.body);
 
-      const branchId = resolveBranchId(req.principal, body.branchId);
-
-      const clash = await db
-        .selectFrom('product')
-        .select('id')
-        .where('name', 'ilike', body.name)
-        .where('branch_id', '=', branchId)
-        .executeTakeFirst();
-
-      if (clash) throw conflict(`A product named "${body.name}" already exists`);
+      const clash = await findIdentityClash(
+        body.name,
+        body.brandId ?? null,
+        body.type,
+        body.placement,
+      );
+      if (clash) {
+        throw conflict(`A product matching "${body.name}" (same brand, type and placement) already exists`);
+      }
 
       const row = await withTransaction(async (tx) => {
         const created = await tx
@@ -589,19 +642,18 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
             name: body.name,
             other_name: body.otherName ?? null,
             price: body.price,
-            sale_price: body.salePrice,
-            least_price: body.leastPrice,
             open_qty: '0',
             company_id: 0,
             brand_id: body.brandId ?? null,
             category_id: body.categoryId ?? null,
             unit_of_measure: body.unitOfMeasure ?? null,
             company_barcode: body.companyBarcode ?? null,
-            reorder_level: body.reorderLevel,
             brand_discount: '0',
-            shelf_number: 0,
             image_path: null,
-            branch_id: branchId,
+            type: body.type,
+            placement: body.placement,
+            cell_type_id: body.cellTypeId ?? null,
+            cell_count: body.cellCount ?? null,
             is_active: body.isActive,
             created_by: req.principal.empId,
             updated_by: req.principal.empId,
@@ -614,7 +666,7 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
           {
             form: 'Finish Product',
             action: 'New',
-            detail: `Created product: ${created.name}, cost ${created.price}, sale ${created.sale_price}`,
+            detail: `Created product: ${created.name}, cost ${created.price}`,
             invId: created.id,
           },
           tx,
@@ -630,19 +682,24 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
   app.put('/products/:id', {
     preHandler: app.requireAction(PRODUCT.formId, PRODUCT.edit),
     handler: async (req) => {
+      if (!req.principal.isSuperAdmin) {
+        throw forbidden('Only the super admin can edit the master catalog');
+      }
+
       const { id } = idParam.parse(req.params);
       const body = z
         .object({
           name: z.string().trim().min(1).max(200),
           otherName: z.string().trim().max(200).nullish(),
           price: decimal,
-          salePrice: decimal,
-          leastPrice: decimal.default('0'),
           brandId: z.coerce.number().int().positive().nullish(),
           categoryId: z.coerce.number().int().positive().nullish(),
           unitOfMeasure: z.string().trim().max(50).nullish(),
           companyBarcode: z.string().trim().max(100).nullish(),
-          reorderLevel: z.coerce.number().int().min(0).default(0),
+          type: z.enum(PRODUCT_TYPES).default('NEW'),
+          placement: z.enum(PRODUCT_PLACEMENTS).default('INT'),
+          cellTypeId: z.coerce.number().int().positive().nullish(),
+          cellCount: z.coerce.number().int().positive().nullish(),
           isActive: z.boolean().default(true),
         })
         .parse(req.body);
@@ -655,6 +712,17 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
 
       if (!existing) throw notFound('Product');
 
+      const clash = await findIdentityClash(
+        body.name,
+        body.brandId ?? null,
+        body.type,
+        body.placement,
+        id,
+      );
+      if (clash) {
+        throw conflict(`A product matching "${body.name}" (same brand, type and placement) already exists`);
+      }
+
       return withTransaction(async (tx) => {
         const row = await tx
           .updateTable('product')
@@ -662,13 +730,14 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
             name: body.name,
             other_name: body.otherName ?? null,
             price: body.price,
-            sale_price: body.salePrice,
-            least_price: body.leastPrice,
             brand_id: body.brandId ?? null,
             category_id: body.categoryId ?? null,
             unit_of_measure: body.unitOfMeasure ?? null,
             company_barcode: body.companyBarcode ?? null,
-            reorder_level: body.reorderLevel,
+            type: body.type,
+            placement: body.placement,
+            cell_type_id: body.cellTypeId ?? null,
+            cell_count: body.cellCount ?? null,
             is_active: body.isActive,
             updated_at: new Date(),
             updated_by: req.principal.empId,

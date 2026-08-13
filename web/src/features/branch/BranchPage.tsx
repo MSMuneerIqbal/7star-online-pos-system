@@ -11,7 +11,13 @@ import { Field, PageHeader } from '@/components/ui/Field';
 interface Branch {
   id: number;
   name: string;
+  code: string | null;
+  type: 'BRANCH' | 'WAREHOUSE';
   address: string | null;
+  phone: string | null;
+  opening_hours: string | null;
+  closing_day: string | null;
+  is_active: boolean;
   longitude: string;
   latitude: string;
   created_at: string;
@@ -27,7 +33,18 @@ interface Paged<T> {
 // Legacy form 2 / form code 201 — see api/migrations/1700000000003.
 const PERM = { formId: 2, create: 2012, edit: 2013, remove: 2014 };
 
-const EMPTY = { name: '', address: '', longitude: '0', latitude: '0' };
+const EMPTY = {
+  name: '',
+  code: '',
+  type: 'BRANCH' as 'BRANCH' | 'WAREHOUSE',
+  address: '',
+  phone: '',
+  openingHours: '',
+  closingDay: '',
+  isActive: true,
+  longitude: '0',
+  latitude: '0',
+};
 
 export function BranchPage() {
   const { hasAction } = useAuth();
@@ -56,10 +73,15 @@ export function BranchPage() {
   };
 
   const save = useMutation({
-    mutationFn: (body: typeof EMPTY) =>
-      editing
-        ? api.put<Branch>(`/branches/${editing.id}`, body)
-        : api.post<Branch>('/branches', body),
+    mutationFn: (body: typeof EMPTY) => {
+      // Code and type are asked for once, on create, and immutable after —
+      // the API does not accept them on an edit.
+      if (editing) {
+        const { code: _code, type: _type, ...rest } = body;
+        return api.put<Branch>(`/branches/${editing.id}`, rest);
+      }
+      return api.post<Branch>('/branches', body);
+    },
     onSuccess: (row) => {
       toast.success(editing ? `Updated ${row.name}` : `Created ${row.name}`);
       void queryClient.invalidateQueries({ queryKey: ['branches'] });
@@ -90,16 +112,25 @@ export function BranchPage() {
 
   const columns: readonly Column<Branch>[] = [
     { key: 'id', header: 'ID', numeric: true, width: '4rem' },
+    { key: 'code', header: 'Code', width: '5rem', cell: (r) => r.code ?? '—' },
     { key: 'name', header: 'Name' },
+    { key: 'type', header: 'Type', width: '7rem', cell: (r) => (r.type === 'WAREHOUSE' ? 'Warehouse' : 'Branch') },
     { key: 'address', header: 'Address', cell: (r) => r.address ?? '—' },
+    { key: 'phone', header: 'Phone', cell: (r) => r.phone ?? '—' },
     {
-      key: 'coords',
-      header: 'Coordinates',
-      numeric: true,
+      key: 'is_active',
+      header: 'Status',
+      width: '7rem',
       cell: (r) =>
-        Number(r.latitude) || Number(r.longitude)
-          ? `${Number(r.latitude).toFixed(4)}, ${Number(r.longitude).toFixed(4)}`
-          : '—',
+        r.is_active ? (
+          <span className="rounded-sm bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-800">
+            Active
+          </span>
+        ) : (
+          <span className="rounded-sm bg-slate-200 px-1.5 py-0.5 text-xs font-medium text-slate-600">
+            Inactive
+          </span>
+        ),
     },
   ];
 
@@ -159,7 +190,13 @@ export function BranchPage() {
                         setEditing(row);
                         setForm({
                           name: row.name,
+                          code: row.code ?? '',
+                          type: row.type,
                           address: row.address ?? '',
+                          phone: row.phone ?? '',
+                          openingHours: row.opening_hours ?? '',
+                          closingDay: row.closing_day ?? '',
+                          isActive: row.is_active,
                           longitude: row.longitude,
                           latitude: row.latitude,
                         });
@@ -236,6 +273,51 @@ export function BranchPage() {
             onChange={(e) => setForm({ ...form, name: e.target.value })}
           />
 
+          {editing ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <span className="field-label">Code</span>
+                <p className="field-input flex items-center bg-slate-50 text-slate-500">
+                  {editing.code}
+                </p>
+              </div>
+              <div>
+                <span className="field-label">Type</span>
+                <p className="field-input flex items-center bg-slate-50 text-slate-500">
+                  {editing.type === 'WAREHOUSE' ? 'Warehouse' : 'Branch'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <Field
+                label="Code"
+                name="code"
+                required
+                value={form.code}
+                error={fieldErrors.code}
+                hint="Prefixes every document this branch issues. Cannot change later."
+                onChange={(e) => setForm({ ...form, code: e.target.value })}
+              />
+              <div>
+                <label htmlFor="type" className="field-label">
+                  Type
+                </label>
+                <select
+                  id="type"
+                  className="field-input"
+                  value={form.type}
+                  onChange={(e) =>
+                    setForm({ ...form, type: e.target.value as 'BRANCH' | 'WAREHOUSE' })
+                  }
+                >
+                  <option value="BRANCH">Branch</option>
+                  <option value="WAREHOUSE">Warehouse</option>
+                </select>
+              </div>
+            </div>
+          )}
+
           <Field
             label="Address"
             name="address"
@@ -243,6 +325,41 @@ export function BranchPage() {
             error={fieldErrors.address}
             onChange={(e) => setForm({ ...form, address: e.target.value })}
           />
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field
+              label="Phone"
+              name="phone"
+              value={form.phone}
+              error={fieldErrors.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            />
+            <Field
+              label="Closing day"
+              name="closingDay"
+              value={form.closingDay}
+              error={fieldErrors.closingDay}
+              onChange={(e) => setForm({ ...form, closingDay: e.target.value })}
+            />
+          </div>
+
+          <Field
+            label="Opening hours"
+            name="openingHours"
+            value={form.openingHours}
+            error={fieldErrors.openingHours}
+            onChange={(e) => setForm({ ...form, openingHours: e.target.value })}
+          />
+
+          <label className="flex items-center gap-2 py-1 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={form.isActive}
+              onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
+              className="rounded-sm border-slate-300"
+            />
+            Active
+          </label>
 
           <div className="grid grid-cols-2 gap-3">
             <Field

@@ -87,18 +87,27 @@ export async function getStockReport(
     LEFT   JOIN moves m ON m.pid = rp.id
     WHERE  rp.is_active
     ORDER  BY rp.name`
-        : sql`
+        : // Reorder threshold now lives on branch_product (Phase 1, the
+          // catalog split) — one per branch, not one per model. At a single
+          // branch it joins straight through; across all branches there is
+          // no single threshold to show, so it reads 0 / never-below rather
+          // than guessing an aggregate.
+          sql`
     SELECT p.id            AS pid,
            p.name          AS name,
            p.open_qty::text AS open_qty,
            COALESCE(m.in_qty, 0)::text  AS in_qty,
            COALESCE(m.out_qty, 0)::text AS out_qty,
            p.price::text   AS cost,
-           p.reorder_level::text AS reorder_level
+           COALESCE(bp.low_stock_threshold, 0)::text AS reorder_level
     FROM   product p
     LEFT   JOIN moves m ON m.pid = p.id
+    ${
+      branchId === null
+        ? sql`LEFT JOIN branch_product bp ON false`
+        : sql`LEFT JOIN branch_product bp ON bp.product_id = p.id AND bp.branch_id = ${branchId}`
+    }
     WHERE  p.is_active
-      ${branchId === null ? sql`` : sql`AND p.branch_id = ${branchId}`}
     ORDER  BY p.name`
     }
   `.execute(db);

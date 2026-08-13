@@ -7,7 +7,7 @@ import type { InvoiceLine, PricedLine } from './useInvoiceLines';
 export interface GridProduct {
   id: number;
   name: string | null;
-  sale_price: string;
+  sellingPrice: string;
 }
 
 interface InvoiceGridProps {
@@ -44,8 +44,8 @@ export function InvoiceGrid({
     onChange(key, {
       pid,
       pname: product.name ?? '',
-      // Prefill the sale price; the operator can still negotiate it.
-      price: product.sale_price,
+      // Prefill the price; the operator can still negotiate it.
+      price: product.sellingPrice,
     });
 
     // Straight to quantity — the next thing anyone types.

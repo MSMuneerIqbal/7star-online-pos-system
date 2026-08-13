@@ -64,6 +64,7 @@ export const PURCHASE_RETURN: ReturnConfig = {
 
 interface ReturnRow {
   id: number;
+  doc_number: string;
   date: string;
   net_total: string;
   paid?: string;
@@ -103,7 +104,7 @@ export function ReturnPage({ config }: { config: ReturnConfig }) {
   });
 
   const columns: readonly Column<ReturnRow>[] = [
-    { key: 'id', header: 'Return', numeric: true, width: '5rem' },
+    { key: 'doc_number', header: 'Return', width: '6rem' },
     { key: 'date', header: 'Date', width: '8rem' },
     ...(config.partyField === 'custId'
       ? ([
@@ -169,7 +170,7 @@ export function ReturnPage({ config }: { config: ReturnConfig }) {
             ? (row) => (
                 <button
                   type="button"
-                  title={`Print ${config.title} ${row.id}`}
+                  title={`Print ${config.title} ${row.doc_number}`}
                   className="rounded-sm p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand-600"
                   onClick={() =>
                     window.open(`/print/${config.printKind}/${row.id}?auto=1`, '_blank', 'noopener')
@@ -207,9 +208,19 @@ function ReturnComposer({ config, onDone }: { config: ReturnConfig; onDone: () =
   const needsBranch = user?.isSuperAdmin ?? false;
   const grid = useInvoiceLines();
 
+  // Branches and parties load immediately — the branch picker itself
+  // depends on this response. Sale-return pricing is branch-specific since
+  // the catalog split, so the server only fills in `products` once
+  // `branchId` is on the query; refetch when it changes rather than gating
+  // the whole request behind it (that would make the branch picker
+  // unreachable). Harmless no-op for purchase returns, whose raw-material
+  // cost isn't branch-scoped.
   const formData = useQuery({
-    queryKey: [config.endpoint, 'form-data'],
-    queryFn: () => api.get<FormData>(`/${config.endpoint}/form-data`),
+    queryKey: [config.endpoint, 'form-data', branchId],
+    queryFn: () =>
+      api.get<FormData>(
+        `/${config.endpoint}/form-data${branchId !== null ? `?branchId=${branchId}` : ''}`,
+      ),
   });
 
   const parties = formData.data?.[config.partyListKey] ?? [];
@@ -338,7 +349,13 @@ function ReturnComposer({ config, onDone }: { config: ReturnConfig; onDone: () =
               id="branch"
               className="field-input"
               value={branchId ?? ''}
-              onChange={(e) => setBranchId(e.target.value ? Number(e.target.value) : null)}
+              onChange={(e) => {
+                setBranchId(e.target.value ? Number(e.target.value) : null);
+                // Prices are branch-specific for sale returns — lines picked
+                // under a different branch would otherwise keep showing a
+                // price that isn't this branch's.
+                grid.reset();
+              }}
             >
               <option value="">Select a branch…</option>
               {formData.data?.branches.map((b) => (

@@ -32,9 +32,11 @@ const ACCOUNTS = [
 async function seed(tx: Tx) {
   await seedLedgerFixtures(tx, { branchId: BRANCH, accountIds: ACCOUNTS });
 
+  // Return totals only read product.price (company cost) — sale price is a
+  // branch_product concern the caller supplies per line.
   const product = await tx
     .insertInto('product')
-    .values({ name: 'Battery 12V 100Ah', price: '11500.00', sale_price: '14500.00', branch_id: BRANCH })
+    .values({ name: 'Battery 12V 100Ah', price: '11500.00' })
     .returning('id')
     .executeTakeFirstOrThrow();
 
@@ -125,6 +127,7 @@ describe('sale return posting', () => {
         .insertInto('sale_return')
         .values({
           date: '2026-03-10',
+          doc_number: 'T9300-SR-1',
           cust_id: custId,
           branch_id: BRANCH,
           gross_total: t.grossTotal,
@@ -224,6 +227,7 @@ describe('purchase return', () => {
         .insertInto('purchase_return')
         .values({
           date: '2026-03-11',
+          doc_number: 'T9300-PR-1',
           sup_id: supId,
           branch_id: BRANCH,
           gross_total: t.subTotal,
@@ -283,9 +287,10 @@ describe('hold sale', () => {
       const { pid, custId } = await seed(tx);
 
       const hold = await tx
-        .insertInto('lease_sale')
+        .insertInto('hold_sale')
         .values({
           date: '2026-03-12',
+          doc_number: 'T9300-H-1',
           cust_id: custId,
           branch_id: BRANCH,
           status: 'HELD',
@@ -294,7 +299,7 @@ describe('hold sale', () => {
         .executeTakeFirstOrThrow();
 
       await tx
-        .insertInto('lease_sale_detail')
+        .insertInto('hold_sale_detail')
         .values({ sale_id: hold.id, pid, pname: 'Battery 12V 100Ah', qty: '3', status: 'HELD' })
         .execute();
 

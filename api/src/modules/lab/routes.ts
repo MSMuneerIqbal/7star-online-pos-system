@@ -46,6 +46,7 @@ export default async function labRoutes(app: FastifyInstance): Promise<void> {
         base
           .select([
             'lab_received.id',
+            'lab_received.doc_number',
             'lab_received.date',
             'lab_received.status',
             'lab_received.gross',
@@ -196,6 +197,7 @@ export default async function labRoutes(app: FastifyInstance): Promise<void> {
         base
           .select([
             'lab.id',
+            'lab.doc_number',
             'lab.date',
             'lab.lab_id',
             'lab.gross',

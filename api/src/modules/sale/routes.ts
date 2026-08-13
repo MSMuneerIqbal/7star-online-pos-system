@@ -77,6 +77,7 @@ export default async function saleRoutes(app: FastifyInstance): Promise<void> {
         base
           .select([
             'sale.id',
+            'sale.doc_number',
             'sale.date',
             'sale.net_total',
             'sale.received',
@@ -104,6 +105,13 @@ export default async function saleRoutes(app: FastifyInstance): Promise<void> {
     handler: async (req) => {
       const branchId = req.principal.branchId;
       const isSuper = req.principal.isSuperAdmin;
+      // A super admin has no implicit branch, so product pricing (branch-
+      // specific since the catalog split) can only be shown once one is
+      // picked on the create screen.
+      const { branchId: queryBranchId } = z
+        .object({ branchId: z.coerce.number().int().positive().optional() })
+        .parse(req.query);
+      const effectiveBranchId = isSuper ? queryBranchId : branchId;
 
       let customers = db
         .selectFrom('customer')
@@ -116,19 +124,30 @@ export default async function saleRoutes(app: FastifyInstance): Promise<void> {
             eb.or([eb('branch_id', '=', branchId), eb('id', '=', WALK_IN_CUSTOMER_ID)]),
           );
 
-      let products = db
-        .selectFrom('product')
-        .select(['id', 'name', 'sale_price', 'least_price', 'unit_of_measure'])
-        .where('is_active', '=', true);
-
-      if (!isSuper) products = products.where('branch_id', '=', branchId);
+      const products = effectiveBranchId
+        ? db
+            .selectFrom('product')
+            .innerJoin('branch_product', 'branch_product.product_id', 'product.id')
+            .select([
+              'product.id',
+              'product.name',
+              'product.unit_of_measure',
+              'branch_product.selling_price as sellingPrice',
+              'branch_product.minimum_price as minimumPrice',
+            ])
+            .where('product.is_active', '=', true)
+            .where('branch_product.is_active', '=', true)
+            .where('branch_product.branch_id', '=', effectiveBranchId)
+            .orderBy('product.name')
+            .execute()
+        : Promise.resolve([]);
 
       let branches = db.selectFrom('branch').select(['id', 'name']).where('id', '>', 0);
       if (!isSuper) branches = branches.where('id', '=', branchId);
 
       const [customerRows, productRows, branchRows] = await Promise.all([
         customers.orderBy('name').execute(),
-        products.orderBy('name').execute(),
+        products,
         branches.orderBy('name').execute(),
       ]);
 

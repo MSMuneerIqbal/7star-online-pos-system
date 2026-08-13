@@ -13,6 +13,7 @@ import { useInvoiceLines } from '@/components/invoice/useInvoiceLines';
 
 interface PurchaseRow {
   id: number;
+  doc_number: string;
   date: string;
   net_total: string;
   paid: string;
@@ -53,7 +54,7 @@ export function PurchasePage() {
   const canPrint = hasAction(PERM.formId, PERM.print);
 
   const columns: readonly Column<PurchaseRow>[] = [
-    { key: 'id', header: 'Invoice', numeric: true, width: '5rem' },
+    { key: 'doc_number', header: 'Invoice', width: '6rem' },
     { key: 'date', header: 'Date', width: '8rem' },
     { key: 'supplier_name', header: 'Supplier', cell: (r) => r.supplier_name ?? '—' },
     { key: 'net_total', header: 'Net Total', numeric: true, cell: (r) => fmtMoney(r.net_total) },
@@ -99,7 +100,7 @@ export function PurchasePage() {
             ? (row) => (
                 <button
                   type="button"
-                  title={`Print invoice ${row.id}`}
+                  title={`Print invoice ${row.doc_number}`}
                   className="rounded-sm p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand-600"
                   onClick={() =>
                     window.open(`/print/purchase/${row.id}?auto=1`, '_blank', 'noopener')

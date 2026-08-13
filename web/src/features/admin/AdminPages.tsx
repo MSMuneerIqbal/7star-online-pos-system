@@ -199,19 +199,71 @@ interface Login {
   employee_name: string | null;
 }
 
+interface Employee {
+  id: number;
+  first_name: string;
+  last_name: string | null;
+  branch_name: string | null;
+}
+
 const LOGIN_PERM = { formId: 16, create: 8032, edit: 8033 };
 
 export function UserLoginsPage() {
-  const { hasAction } = useAuth();
+  const { hasAction, user } = useAuth();
   const queryClient = useQueryClient();
 
   const [page, setPage] = useState(1);
   const [resetting, setResetting] = useState<Login | null>(null);
   const [password, setPassword] = useState('');
 
+  // New login modal.
+  const [creating, setCreating] = useState(false);
+  const [newLogin, setNewLogin] = useState({ empId: 0, username: '', password: '', roleId: 0 });
+
+  // Change role / reassign branch modals.
+  const [changingRole, setChangingRole] = useState<Login | null>(null);
+  const [roleId, setRoleId] = useState<number | null>(null);
+  const [changingBranch, setChangingBranch] = useState<Login | null>(null);
+  const [branchId, setBranchId] = useState<number | null>(null);
+
   const logins = useQuery({
     queryKey: ['admin', 'logins', page],
     queryFn: () => api.get<Paged<Login>>(`/admin/logins?page=${page}&pageSize=20`),
+  });
+
+  const employees = useQuery({
+    queryKey: ['employees', 'options'],
+    queryFn: () => api.get<Paged<Employee>>('/employees?pageSize=200'),
+    enabled: creating,
+  });
+
+  const roles = useQuery({
+    queryKey: ['admin', 'roles'],
+    queryFn: () => api.get<Role[]>('/admin/roles'),
+  });
+
+  const branches = useQuery({
+    queryKey: ['branches', 'options'],
+    queryFn: () => api.get<{ rows: { id: number; name: string }[] }>('/branches?pageSize=200'),
+    enabled: user?.isSuperAdmin ?? false,
+  });
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.post('/admin/logins', {
+        username: newLogin.username,
+        password: newLogin.password,
+        empId: newLogin.empId,
+        roleId: newLogin.roleId,
+      }),
+    onSuccess: () => {
+      toast.success('Login created');
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'logins'] });
+      setCreating(false);
+      setNewLogin({ empId: 0, username: '', password: '', roleId: 0 });
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'Could not create the login'),
   });
 
   const update = useMutation({
@@ -222,10 +274,18 @@ export function UserLoginsPage() {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'logins'] });
       setResetting(null);
       setPassword('');
+      setChangingRole(null);
+      setRoleId(null);
+      setChangingBranch(null);
+      setBranchId(null);
     },
     onError: (err) =>
       toast.error(err instanceof ApiError ? err.message : 'Could not update the login'),
   });
+
+  const canCreate = hasAction(LOGIN_PERM.formId, LOGIN_PERM.create);
+  const canEdit = hasAction(LOGIN_PERM.formId, LOGIN_PERM.edit);
+  const isSuper = user?.isSuperAdmin ?? false;
 
   const columns: readonly Column<Login>[] = [
     { key: 'id', header: 'ID', numeric: true, width: '4rem' },
@@ -258,11 +318,20 @@ export function UserLoginsPage() {
     },
   ];
 
-  const canEdit = hasAction(LOGIN_PERM.formId, LOGIN_PERM.edit);
-
   return (
     <>
-      <PageHeader title="User Logins" subtitle="Who can sign in, and as what" />
+      <PageHeader
+        title="User Logins"
+        subtitle="Who can sign in, and as what"
+        actions={
+          canCreate && (
+            <button type="button" className="btn-primary" onClick={() => setCreating(true)}>
+              <Plus className="size-3.5" />
+              New Login
+            </button>
+          )
+        }
+      />
 
       <DataTable
         columns={columns}
@@ -284,16 +353,42 @@ export function UserLoginsPage() {
                     <Save className="size-3.5" />
                   </button>
                   {row.emp_id !== 0 && (
-                    <button
-                      type="button"
-                      title={row.is_active ? 'Disable' : 'Enable'}
-                      className="rounded-sm px-1.5 py-1 text-xs text-slate-500 hover:bg-slate-100"
-                      onClick={() =>
-                        update.mutate({ id: row.id, body: { isActive: !row.is_active } })
-                      }
-                    >
-                      {row.is_active ? 'Disable' : 'Enable'}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        title="Change role"
+                        className="rounded-sm px-1.5 py-1 text-xs text-slate-500 hover:bg-slate-100"
+                        onClick={() => {
+                          setChangingRole(row);
+                          setRoleId(null);
+                        }}
+                      >
+                        Role
+                      </button>
+                      {isSuper && (
+                        <button
+                          type="button"
+                          title="Reassign branch"
+                          className="rounded-sm px-1.5 py-1 text-xs text-slate-500 hover:bg-slate-100"
+                          onClick={() => {
+                            setChangingBranch(row);
+                            setBranchId(null);
+                          }}
+                        >
+                          Branch
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        title={row.is_active ? 'Disable' : 'Enable'}
+                        className="rounded-sm px-1.5 py-1 text-xs text-slate-500 hover:bg-slate-100"
+                        onClick={() =>
+                          update.mutate({ id: row.id, body: { isActive: !row.is_active } })
+                        }
+                      >
+                        {row.is_active ? 'Disable' : 'Enable'}
+                      </button>
+                    </>
                   )}
                 </div>
               )
@@ -310,6 +405,182 @@ export function UserLoginsPage() {
         />
       )}
 
+      {/* New login */}
+      <Modal
+        open={creating}
+        title="New Login"
+        onClose={() => setCreating(false)}
+        footer={
+          <>
+            <button type="button" className="btn-secondary" onClick={() => setCreating(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={
+                newLogin.empId === 0 ||
+                newLogin.username.trim().length < 3 ||
+                newLogin.password.length < 10 ||
+                newLogin.roleId === 0 ||
+                create.isPending
+              }
+              onClick={() => create.mutate()}
+            >
+              Create
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <div>
+            <label htmlFor="loginEmp" className="field-label">
+              Employee<span className="ml-0.5 text-red-500">*</span>
+            </label>
+            <select
+              id="loginEmp"
+              className="field-input"
+              value={newLogin.empId || ''}
+              onChange={(e) => setNewLogin({ ...newLogin, empId: Number(e.target.value) })}
+            >
+              <option value="">Select an employee…</option>
+              {employees.data?.rows.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.first_name}
+                  {e.last_name ? ` ${e.last_name}` : ''}
+                  {e.branch_name ? ` — ${e.branch_name}` : ''}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-slate-500">The login's branch follows this employee.</p>
+          </div>
+
+          <Field
+            label="Username"
+            name="username"
+            required
+            autoFocus
+            value={newLogin.username}
+            onChange={(e) => setNewLogin({ ...newLogin, username: e.target.value })}
+          />
+
+          <Field
+            label="Password"
+            name="password"
+            type="password"
+            required
+            value={newLogin.password}
+            onChange={(e) => setNewLogin({ ...newLogin, password: e.target.value })}
+            hint="At least 10 characters."
+          />
+
+          <div>
+            <label htmlFor="loginRole" className="field-label">
+              Role<span className="ml-0.5 text-red-500">*</span>
+            </label>
+            <select
+              id="loginRole"
+              className="field-input"
+              value={newLogin.roleId || ''}
+              onChange={(e) => setNewLogin({ ...newLogin, roleId: Number(e.target.value) })}
+            >
+              <option value="">Select a role…</option>
+              {roles.data?.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Change role */}
+      <Modal
+        open={changingRole !== null}
+        title={`Change role for ${changingRole?.username ?? ''}`}
+        onClose={() => setChangingRole(null)}
+        footer={
+          <>
+            <button type="button" className="btn-secondary" onClick={() => setChangingRole(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={roleId === null || update.isPending}
+              onClick={() => update.mutate({ id: changingRole!.id, body: { roleId } })}
+            >
+              Change
+            </button>
+          </>
+        }
+      >
+        <div>
+          <label htmlFor="roleSelect" className="field-label">
+            Role
+          </label>
+          <select
+            id="roleSelect"
+            className="field-input"
+            value={roleId ?? ''}
+            onChange={(e) => setRoleId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">Select a role…</option>
+            {roles.data?.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </Modal>
+
+      {/* Reassign branch */}
+      <Modal
+        open={changingBranch !== null}
+        title={`Reassign branch for ${changingBranch?.username ?? ''}`}
+        onClose={() => setChangingBranch(null)}
+        footer={
+          <>
+            <button type="button" className="btn-secondary" onClick={() => setChangingBranch(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={branchId === null || update.isPending}
+              onClick={() => update.mutate({ id: changingBranch!.id, body: { branchId } })}
+            >
+              Reassign
+            </button>
+          </>
+        }
+      >
+        <div>
+          <label htmlFor="branchSelect" className="field-label">
+            Branch
+          </label>
+          <select
+            id="branchSelect"
+            className="field-input"
+            value={branchId ?? ''}
+            onChange={(e) => setBranchId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">Select a branch…</option>
+            {branches.data?.rows.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-slate-500">
+            Moves the employee and their access to the chosen branch.
+          </p>
+        </div>
+      </Modal>
+
+      {/* Reset password */}
       <Modal
         open={resetting !== null}
         title={`Reset password for ${resetting?.username ?? ''}`}
@@ -440,6 +711,65 @@ export function UserLogsPage() {
           page={logs.data.page}
           pageSize={logs.data.pageSize}
           total={logs.data.total}
+          onPageChange={setPage}
+        />
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Login history
+// ---------------------------------------------------------------------------
+
+interface LoginHistoryRow {
+  id: string;
+  at: string;
+  username: string;
+  ip: string | null;
+  user_agent: string | null;
+  branch_name: string | null;
+}
+
+export function LoginHistoryPage() {
+  const [page, setPage] = useState(1);
+
+  const history = useQuery({
+    queryKey: ['admin', 'login-history', page],
+    queryFn: () => api.get<Paged<LoginHistoryRow>>(`/admin/login-history?page=${page}&pageSize=25`),
+  });
+
+  const columns: readonly Column<LoginHistoryRow>[] = [
+    {
+      key: 'at',
+      header: 'When',
+      width: '11rem',
+      cell: (r) => new Date(r.at).toLocaleString(),
+    },
+    { key: 'username', header: 'User', width: '9rem' },
+    { key: 'branch_name', header: 'Branch', width: '10rem', cell: (r) => r.branch_name ?? '—' },
+    { key: 'ip', header: 'IP', width: '9rem', cell: (r) => r.ip ?? '—' },
+    { key: 'user_agent', header: 'Device', cell: (r) => r.user_agent ?? '—' },
+  ];
+
+  return (
+    <>
+      <PageHeader title="Login History" subtitle="Who signed in, when, and from where" />
+
+      <DataTable
+        columns={columns}
+        rows={history.data?.rows ?? []}
+        rowKey={(r) => r.id}
+        loading={history.isPending}
+        error={history.error ? (history.error as Error).message : null}
+        emptyMessage="No sign-ins recorded yet"
+      />
+
+      {history.data && (
+        <Pagination
+          page={history.data.page}
+          pageSize={history.data.pageSize}
+          total={history.data.total}
           onPageChange={setPage}
         />
       )}

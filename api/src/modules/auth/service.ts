@@ -181,6 +181,18 @@ export async function login(
       tx,
     );
 
+    // A success is recorded for the Login History screen — who, when, from where.
+    await tx
+      .insertInto('login_history')
+      .values({
+        user_id: user.id,
+        username: user.username,
+        branch_id: principal.branchId,
+        ip: client.ip ?? null,
+        user_agent: client.userAgent ?? null,
+      })
+      .execute();
+
     return result;
   });
 }

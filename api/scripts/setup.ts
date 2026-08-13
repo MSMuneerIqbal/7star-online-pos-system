@@ -83,9 +83,18 @@ const result = await withTransaction(async (tx) => {
     .executeTakeFirst();
 
   if (!branch) {
+    // Code prefixes every document this branch issues and is immutable once
+    // set (a CHECK constraint since the catalog-split migration requires
+    // one for any real branch) — derived here since this script's caller
+    // supplies only a name.
+    const code = branchName
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 8) || 'HQ';
+
     branch = await tx
       .insertInto('branch')
-      .values({ name: branchName })
+      .values({ name: branchName, code })
       .returning(['id', 'name'])
       .executeTakeFirstOrThrow();
   }

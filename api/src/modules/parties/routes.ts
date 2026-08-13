@@ -532,7 +532,6 @@ export default async function partyRoutes(app: FastifyInstance): Promise<void> {
           city: z.string().trim().max(100).nullish(),
           province: z.string().trim().max(100).nullish(),
           basicSalary: decimal.default('0'),
-          departmentId: z.coerce.number().int().positive().nullish(),
           dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
           joinDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
           branchId: z.coerce.number().int().optional(),
@@ -567,7 +566,6 @@ export default async function partyRoutes(app: FastifyInstance): Promise<void> {
             basic_salary: body.basicSalary,
             branch_id: branchId,
             account_no: accountId,
-            department_id: body.departmentId ?? null,
             dob: body.dob ?? null,
             join_date: body.joinDate ?? null,
             img: null,
@@ -595,19 +593,16 @@ export default async function partyRoutes(app: FastifyInstance): Promise<void> {
     },
   });
 
-  /** Departments and branches for the employee form. */
+  /** Branches for the employee form. */
   app.get('/employee-options', {
     preHandler: app.requireAction(EMPLOYEE.formId, EMPLOYEE.view),
     handler: async (req) => {
       let branches = db.selectFrom('branch').select(['id', 'name']).where('id', '>', 0);
       if (!req.principal.isSuperAdmin) branches = branches.where('id', '=', req.principal.branchId);
 
-      const [departments, branchRows] = await Promise.all([
-        db.selectFrom('department').select(['id', 'name']).orderBy('name').execute(),
-        branches.orderBy('name').execute(),
-      ]);
+      const branchRows = await branches.orderBy('name').execute();
 
-      return { departments, branches: branchRows };
+      return { branches: branchRows };
     },
   });
 }

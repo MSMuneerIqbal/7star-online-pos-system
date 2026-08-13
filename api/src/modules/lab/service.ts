@@ -30,6 +30,7 @@
 import { db, withTransaction, type Tx } from '../../core/db/index.js';
 import { add, gt, money, mul, type MoneyString } from '../../core/money.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
+import { issueDocumentNumber } from '../../core/numbering.js';
 import { writeAudit } from '../../core/audit.js';
 import { assertBranchAccess, resolveBranchId, type Principal } from '../../core/rbac.js';
 import { postLabInvoice, postLabMaterials } from '../../accounting/rules/lab.js';
@@ -99,10 +100,13 @@ export async function createIntake(
       };
     });
 
+    const { docNumber } = await issueDocumentNumber(tx, branchId, 'LAB_RECEIVED');
+
     const intake = await tx
       .insertInto('lab_received')
       .values({
         date: input.date,
+        doc_number: docNumber,
         cust_id: input.custId,
         branch_id: branchId,
         note: input.note ?? null,
@@ -305,10 +309,13 @@ export async function createLabInvoice(
       throw conflict(`Received ${fmt(received)} is more than the invoice total ${fmt(gross)}`);
     }
 
+    const { docNumber } = await issueDocumentNumber(tx, intake.branch_id, 'LAB');
+
     const invoice = await tx
       .insertInto('lab')
       .values({
         date: input.date,
+        doc_number: docNumber,
         lab_id: input.labReceivedId,
         branch_id: intake.branch_id,
         cust_id: intake.cust_id,

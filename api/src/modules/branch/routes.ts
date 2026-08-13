@@ -26,6 +26,10 @@ const branchBody = z.object({
   address: z.string().trim().max(500).nullish(),
   longitude: z.coerce.number().min(-180).max(180).default(0),
   latitude: z.coerce.number().min(-90).max(90).default(0),
+  phone: z.string().trim().max(50).nullish(),
+  openingHours: z.string().trim().max(100).nullish(),
+  closingDay: z.string().trim().max(50).nullish(),
+  isActive: z.boolean().default(true),
 });
 
 const idParam = z.object({ id: z.coerce.number().int().min(1) });
@@ -52,7 +56,18 @@ export default async function branchRoutes(app: FastifyInstance): Promise<void> 
 
       const [rows, count] = await Promise.all([
         base
-          .select(['id', 'name', 'address', 'longitude', 'latitude', 'created_at'])
+          .select([
+            'id',
+            'name',
+            'code',
+            'type',
+            'address',
+            'phone',
+            'longitude',
+            'latitude',
+            'is_active',
+            'created_at',
+          ])
           .orderBy('name', q.dir)
           .limit(q.pageSize)
           .offset(offset(q))
@@ -89,15 +104,35 @@ export default async function branchRoutes(app: FastifyInstance): Promise<void> 
   app.post('/', {
     preHandler: app.requireAction(PERM.formId, PERM.create),
     handler: async (req, reply) => {
-      const body = branchBody.parse(req.body);
+      // Code prefixes every document this branch issues and is immutable
+      // once set, so it is asked for once, here, and never editable again.
+      const body = branchBody
+        .extend({
+          code: z
+            .string()
+            .trim()
+            .min(1, 'Code is required')
+            .max(10)
+            .regex(/^[A-Za-z0-9]+$/, 'Code must be letters and numbers only'),
+          type: z.enum(['BRANCH', 'WAREHOUSE']).default('BRANCH'),
+        })
+        .parse(req.body);
+
       await assertNameFree(body.name);
+      await assertCodeFree(body.code);
 
       const created = await withTransaction(async (tx) => {
         const row = await tx
           .insertInto('branch')
           .values({
             name: body.name,
+            code: body.code.toUpperCase(),
+            type: body.type,
             address: body.address ?? null,
+            phone: body.phone ?? null,
+            opening_hours: body.openingHours ?? null,
+            closing_day: body.closingDay ?? null,
+            is_active: body.isActive,
             longitude: String(body.longitude),
             latitude: String(body.latitude),
             created_by: req.principal.empId,
@@ -147,6 +182,10 @@ export default async function branchRoutes(app: FastifyInstance): Promise<void> 
           .set({
             name: body.name,
             address: body.address ?? null,
+            phone: body.phone ?? null,
+            opening_hours: body.openingHours ?? null,
+            closing_day: body.closingDay ?? null,
+            is_active: body.isActive,
             longitude: String(body.longitude),
             latitude: String(body.latitude),
             updated_at: new Date(),
@@ -223,6 +262,17 @@ async function assertNameFree(name: string, exceptId?: number): Promise<void> {
   }
 }
 
+async function assertCodeFree(code: string): Promise<void> {
+  const clash = await db
+    .selectFrom('branch')
+    .select('id')
+    .where('id', '>', SENTINEL_BRANCH)
+    .where(sql<boolean>`upper(code) = upper(${code})`)
+    .executeTakeFirst();
+
+  if (clash) throw conflict(`Branch code "${code.toUpperCase()}" is already in use`);
+}
+
 /**
  * Refuse to delete a branch that other records point at.
  *
@@ -230,12 +280,17 @@ async function assertNameFree(name: string, exceptId?: number): Promise<void> {
  * rather than the problem. This says which table is holding the reference.
  */
 async function assertBranchUnused(id: number): Promise<void> {
+  // `product` is deliberately absent here since the catalog split: the
+  // fan-out trigger gives every active branch a `branch_product` row for
+  // every active product, so counting those would make every branch
+  // permanently undeletable. Deactivating (is_active) is the intended path
+  // for a branch that no longer trades; hard delete stays blocked only by
+  // real transactional history.
   const referencing = await sql<{ table_name: string; n: string }>`
     SELECT 'sale'     AS table_name, count(*)::text AS n FROM sale     WHERE branch_id = ${id}
     UNION ALL SELECT 'purchase', count(*)::text FROM purchase          WHERE branch_id = ${id}
     UNION ALL SELECT 'employee', count(*)::text FROM employee          WHERE branch_id = ${id}
     UNION ALL SELECT 'customer', count(*)::text FROM customer          WHERE branch_id = ${id}
-    UNION ALL SELECT 'product',  count(*)::text FROM product           WHERE branch_id = ${id}
     UNION ALL SELECT 'transactions', count(*)::text FROM transactions  WHERE branch_id = ${id}
   `.execute(db);
 
