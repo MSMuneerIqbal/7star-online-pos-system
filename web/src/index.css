@@ -31,6 +31,37 @@
   --color-brand-800: oklch(0.34 0.11 261.5);
   --color-brand-900: oklch(0.27 0.08 261.5);
 
+  /* Chart surfaces */
+  --color-chart-surface: #ffffff;
+  --color-chart-grid: #e2e8f0;
+  --color-chart-axis: #94a3b8;
+
+  /* Categorical — 4 slots */
+  --color-series-1: #346dd7;
+  --color-series-2: #c57800;
+  --color-series-3: #009d89;
+  --color-series-4: #6f3bb2;
+  --color-series-muted: #cbd5e1;
+
+  /* Status — reserved, never a series */
+  --color-status-good: #1c882d;
+  --color-status-warning: #d78d00;
+  --color-status-critical: #dc2626;
+
+  /* Sequential — the brand ramp */
+  --color-seq-100: #dbecff;
+  --color-seq-200: #bad9ff;
+  --color-seq-300: #92beff;
+  --color-seq-400: #6ca2ff;
+  --color-seq-500: #4b86f3;
+  --color-seq-600: #346dd7;
+  --color-seq-700: #2455b0;
+  --color-seq-800: #193e84;
+
+  /* Dashboard type */
+  --text-stat: 1.5rem;
+  --text-hero: 3rem;
+
   --spacing-row: 0.375rem;
 }
 

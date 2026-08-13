@@ -59,10 +59,13 @@ a phased reshape in motion. Six phases have landed since:
   the filter applied (summary block, coloured headers); new low-stock, dead-stock
   (no movement in 90 days) and aged-receivables reports; and the income statement
   shows gross margin from the 501/502 split.
+- **Dashboards** (PLAN.md Phase 12) — Recharts wrapped once in a Chart component
+  that applies the DESIGN.md tokens; a hero figure plus per-branch figures, and
+  (for the super admin) the sales trend, sales-by-branch and best-sellers charts.
 
-The rest of PLAN.md's phases (12 onward — dashboards, opening balances) have
-not started. Treat the table below as
-"what the original port covered," not "what PLAN.md considers done."
+The last phase (13 — opening balances and go-live) has not started. Treat the
+table below as "what the original port covered," not "what PLAN.md considers
+done."
 
 | Area | State |
 |---|---|
