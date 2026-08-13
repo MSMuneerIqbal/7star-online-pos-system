@@ -26,6 +26,7 @@ export type DocType =
   | 'DISPATCH'
   | 'RECEIPT'
   | 'REMITTANCE'
+  | 'WARRANTY'
   | 'LAB'
   | 'LAB_RECEIVED';
 
@@ -41,6 +42,7 @@ const DOC_CODE: Record<DocType, string | null> = {
   DISPATCH: 'DP',
   RECEIPT: 'RC',
   REMITTANCE: 'RM',
+  WARRANTY: 'WC',
   LAB: 'LB',
   LAB_RECEIVED: 'LR',
 };

@@ -508,6 +508,57 @@ export interface ExpenseTable {
   updated_by: Defaulted<number>;
 }
 
+/** Faulty units at a branch — not sellable, not in stock value. */
+export interface WarrantyHoldTable {
+  id: Generated<number>;
+  branch_id: number;
+  product_id: number;
+  qty: Numeric;
+  date: ColumnType<string, string, string>;
+  note: string | null;
+  status: Defaulted<string>;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
+/** A warranty claim — the branch ships faulty units to the warehouse. */
+export interface WarrantyClaimTable {
+  id: Generated<number>;
+  doc_number: string;
+  branch_id: number;
+  warehouse_branch_id: number | null;
+  date: ColumnType<string, string, string>;
+  status: Defaulted<string>;
+  note: string | null;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
+export interface WarrantyClaimDetailTable {
+  id: Generated<number>;
+  claim_id: number;
+  product_id: number;
+  qty: Numeric;
+  assessment: string | null;
+  outcome: string | null;
+  grade: string | null;
+}
+
+/** Raw parts consumed repairing a claimed unit. */
+export interface WarrantyPartTable {
+  id: Generated<number>;
+  claim_id: number;
+  pid: number;
+  pname: string | null;
+  qty: Numeric;
+  price: Numeric;
+  total: Numeric;
+}
+
 /** Single-row company profile. Supplies the header on every printed document. */
 export interface SettingTable {
   id: Generated<number>;
@@ -1122,6 +1173,10 @@ export interface Database {
   branch_repair_price: BranchRepairPriceTable;
   expense_category: ExpenseCategoryTable;
   expense: ExpenseTable;
+  warranty_hold: WarrantyHoldTable;
+  warranty_claim: WarrantyClaimTable;
+  warranty_claim_detail: WarrantyClaimDetailTable;
+  warranty_part: WarrantyPartTable;
   sale_customer: SaleCustomerTable;
   sale: SaleTable;
   sale_detail: SaleDetailTable;

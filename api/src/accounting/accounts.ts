@@ -39,6 +39,8 @@ export const ACC = {
   PRODUCTION_WAGES: 5010102,
   /** Short/damaged stock found on arrival at a branch — a company expense. */
   STOCK_LOSS: 5010103,
+  /** Warranty replacements and repairs — the warehouse carries the cost. */
+  WARRANTY_EXPENSE: 5010104,
   /** Inward freight / cargo on DO receiving. */
   FREIGHT_IN: 5020201,
   /**
