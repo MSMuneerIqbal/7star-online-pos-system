@@ -19,6 +19,7 @@ import { TrialBalancePage } from '@/features/ledger/TrialBalancePage';
 import { DemandOrderPage } from '@/features/demand-order/DemandOrderPage';
 import { RemittancePage } from '@/features/remittance/RemittancePage';
 import { CustomerStatementPage } from '@/features/customer/CustomerStatementPage';
+import { ExpensePage } from '@/features/expense/ExpensePage';
 import {
   BalanceSheetPage,
   CashBookPage,
@@ -90,6 +91,7 @@ const IMPLEMENTED: Record<string, React.ComponentType> = {
   '/demand-orders/finish': () => <DemandOrderPage kind="finish" />,
   '/remittances': RemittancePage,
   '/customers/statement': CustomerStatementPage,
+  '/expenses': ExpensePage,
 
   // Reports — every one of these was a dead link in the legacy sidebar.
   '/reports/raw/stock': () => <StockReportPage kind="raw" />,

@@ -71,6 +71,8 @@ const TABLES = [
   'lab_received',
   // inter-branch
   'remittance',
+  // expenses
+  'expense',
   // catalog and parties
   'branch_product',
   'product',

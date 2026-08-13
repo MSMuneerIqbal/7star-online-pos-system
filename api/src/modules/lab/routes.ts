@@ -7,7 +7,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { db } from '../../core/db/index.js';
-import { notFound } from '../../core/errors.js';
+import { forbidden, notFound } from '../../core/errors.js';
 import { formPermissions, likeTerm, listQuery, offset, paged } from '../../core/crud.js';
 import * as service from './service.js';
 
@@ -70,6 +70,7 @@ export default async function labRoutes(app: FastifyInstance): Promise<void> {
     preHandler: app.requireAction(RECEIVING.formId, RECEIVING.view),
     handler: async (req) => {
       const isSuper = req.principal.isSuperAdmin;
+      const branchId = isSuper ? 0 : req.principal.branchId;
 
       let customers = db
         .selectFrom('customer')
@@ -81,7 +82,13 @@ export default async function labRoutes(app: FastifyInstance): Promise<void> {
       let branches = db.selectFrom('branch').select(['id', 'name']).where('id', '>', 0);
       if (!isSuper) branches = branches.where('id', '=', req.principal.branchId);
 
-      const [customerRows, rawRows, branchRows] = await Promise.all([
+      const repairPrices = db
+        .selectFrom('branch_repair_price')
+        .select(['repair_type_id', 'price'])
+        .where('is_active', '=', true)
+        .$if(!isSuper, (q) => q.where('branch_id', '=', req.principal.branchId));
+
+      const [customerRows, rawRows, branchRows, repairTypeRows, repairPriceRows] = await Promise.all([
         customers.orderBy('name').execute(),
         db
           .selectFrom('raw_product')
@@ -90,9 +97,22 @@ export default async function labRoutes(app: FastifyInstance): Promise<void> {
           .orderBy('name')
           .execute(),
         branches.orderBy('name').execute(),
+        db
+          .selectFrom('repair_type')
+          .select(['id', 'name'])
+          .where('is_active', '=', true)
+          .orderBy('name')
+          .execute(),
+        repairPrices.execute(),
       ]);
 
-      return { customers: customerRows, rawMaterials: rawRows, branches: branchRows };
+      return {
+        customers: customerRows,
+        rawMaterials: rawRows,
+        branches: branchRows,
+        repairTypes: repairTypeRows,
+        repairPrices: repairPriceRows,
+      };
     },
   });
 
@@ -136,6 +156,8 @@ export default async function labRoutes(app: FastifyInstance): Promise<void> {
           custId: z.coerce.number().int().positive(),
           branchId: z.coerce.number().int().optional(),
           note: z.string().max(1000).nullish(),
+          repairTypeId: z.coerce.number().int().positive().nullish(),
+          fault: z.string().max(500).nullish(),
           lines: z
             .array(
               z.object({
@@ -225,6 +247,8 @@ export default async function labRoutes(app: FastifyInstance): Promise<void> {
           labReceivedId: z.coerce.number().int().positive(),
           date: dateString,
           received: decimal.default('0'),
+          /** The work actually done — required, per SPECS §9. */
+          description: z.string().trim().min(1, 'Describe the work done').max(2000),
           lines: z
             .array(
               z.object({
@@ -238,6 +262,97 @@ export default async function labRoutes(app: FastifyInstance): Promise<void> {
         .parse(req.body);
 
       return reply.status(201).send(await service.createLabInvoice(req.principal, body));
+    },
+  });
+
+  // ---- repair job types and branch repair prices --------------------------
+
+  app.get('/repair-types', {
+    preHandler: app.requireAction(RECEIVING.formId, RECEIVING.view),
+    handler: async () => {
+      return db
+        .selectFrom('repair_type')
+        .select(['id', 'name', 'is_active'])
+        .orderBy('name')
+        .execute();
+    },
+  });
+
+  app.post('/repair-types', {
+    preHandler: app.requireAction(RECEIVING.formId, RECEIVING.create),
+    handler: async (req, reply) => {
+      if (!req.principal.isSuperAdmin) {
+        throw forbidden('Only the super admin can add a repair job type');
+      }
+      const body = z.object({ name: z.string().trim().min(1).max(150) }).parse(req.body);
+      const created = await db
+        .insertInto('repair_type')
+        .values({ name: body.name, created_by: req.principal.empId, updated_by: req.principal.empId })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      return reply.status(201).send(created);
+    },
+  });
+
+  /** The branch's own repair prices, joined to the central job types. */
+  app.get('/repair-prices', {
+    preHandler: app.requireAction(RECEIVING.formId, RECEIVING.view),
+    handler: async (req) => {
+      let q = db
+        .selectFrom('branch_repair_price')
+        .innerJoin('repair_type', 'repair_type.id', 'branch_repair_price.repair_type_id')
+        .innerJoin('branch', 'branch.id', 'branch_repair_price.branch_id')
+        .select([
+          'branch_repair_price.id',
+          'branch_repair_price.price',
+          'branch_repair_price.minimum_price',
+          'branch_repair_price.branch_id',
+          'repair_type.name as repair_type_name',
+          'branch.name as branch_name',
+        ]);
+
+      if (!req.principal.isSuperAdmin) {
+        q = q.where('branch_repair_price.branch_id', '=', req.principal.branchId);
+      }
+
+      return q.orderBy('repair_type.name').execute();
+    },
+  });
+
+  app.put('/repair-prices/:id', {
+    preHandler: app.requireAction(RECEIVING.formId, RECEIVING.edit),
+    handler: async (req) => {
+      const { id } = idParam.parse(req.params);
+      const body = z
+        .object({
+          price: decimal,
+          minimumPrice: decimal.default('0'),
+          isActive: z.boolean().optional(),
+        })
+        .parse(req.body);
+
+      const existing = await db
+        .selectFrom('branch_repair_price')
+        .select(['id', 'branch_id'])
+        .where('id', '=', id)
+        .executeTakeFirst();
+      if (!existing) throw notFound('Repair price');
+      if (!req.principal.isSuperAdmin && existing.branch_id !== req.principal.branchId) {
+        throw notFound('Repair price');
+      }
+
+      return db
+        .updateTable('branch_repair_price')
+        .set({
+          price: body.price,
+          minimum_price: body.minimumPrice,
+          ...(body.isActive !== undefined ? { is_active: body.isActive } : {}),
+          updated_at: new Date(),
+          updated_by: req.principal.empId,
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
     },
   });
 }

@@ -53,6 +53,10 @@ export interface IntakeInput {
   custId: number;
   branchId?: number | undefined;
   note?: string | null | undefined;
+  /** The repair job type — the charge defaults from the branch's price list. */
+  repairTypeId?: number | null | undefined;
+  /** What is wrong with the battery. */
+  fault?: string | null | undefined;
   /** Items the customer has left for repair. */
   lines: Array<{
     pname: string;
@@ -82,9 +86,19 @@ export async function createIntake(
 
     if (!customer) throw badRequest(`Unknown customer id ${input.custId}`);
 
+    // Default the charge from the branch's own repair price for the job type.
+    const repairPrice = input.repairTypeId
+      ? await tx
+          .selectFrom('branch_repair_price')
+          .select(['price'])
+          .where('branch_id', '=', branchId)
+          .where('repair_type_id', '=', input.repairTypeId)
+          .executeTakeFirst()
+      : undefined;
+
     let gross = '0.00';
     const lines = input.lines.map((l) => {
-      const price = money(l.price ?? '0');
+      const price = money(l.price ?? repairPrice?.price ?? '0');
       const total = mul(l.qty, price);
       gross = add(gross, total);
 
@@ -110,6 +124,8 @@ export async function createIntake(
         cust_id: input.custId,
         branch_id: branchId,
         note: input.note ?? null,
+        repair_type_id: input.repairTypeId ?? null,
+        fault: input.fault ?? null,
         status: LAB_STATUS.RECEIVED,
         gross,
         other: '0',
@@ -252,6 +268,8 @@ export interface LabInvoiceInput {
   /** Repair charges per item. Defaults to what was quoted at intake. */
   lines?: Array<{ pname: string; qty: string; price: string }> | undefined;
   received: string;
+  /** The work actually done — required (SPECS §9). */
+  description: string;
 }
 
 export async function createLabInvoice(
@@ -358,7 +376,7 @@ export async function createLabInvoice(
 
     await tx
       .updateTable('lab_received')
-      .set({ status: LAB_STATUS.INVOICED, updated_at: new Date() })
+      .set({ status: LAB_STATUS.INVOICED, description: input.description, updated_at: new Date() })
       .where('id', '=', input.labReceivedId)
       .execute();
 

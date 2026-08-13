@@ -213,6 +213,12 @@ export const NAV: readonly NavSection[] = [
   },
 
   {
+    headId: 13,
+    title: 'Expenses',
+    items: [{ label: 'Expenses', path: '/expenses', action: [56, 8061], status: 'ported' }],
+  },
+
+  {
     headId: 8,
     title: 'User Management',
     items: [

@@ -424,8 +424,8 @@ export interface CustomerTable {
   account_id: number;
   /** WEEKLY | MONTHLY — the settlement cycle that drives the aging buckets. */
   settlement_cycle: string | null;
-  /** Optional cap on how much this customer may owe at once. */
-  credit_limit: Defaulted<Numeric>;
+  /** Optional cap on how much this customer may owe at once (DEFAULT 0). */
+  credit_limit: ColumnType<string, string | number | undefined, string | number>;
   created_at: CreatedAt;
   updated_at: CreatedAt;
   created_by: number;
@@ -450,6 +450,58 @@ export interface CustomerAdvanceTable {
   amount: Numeric;
   method: Defaulted<string>;
   note: string | null;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
+/** A repair job type — a central list owned by the super admin. */
+export interface RepairTypeTable {
+  id: Generated<number>;
+  name: string;
+  is_active: Defaulted<boolean>;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
+/** One repair price per branch x job type — the branch's own charge. */
+export interface BranchRepairPriceTable {
+  id: Generated<number>;
+  branch_id: number;
+  repair_type_id: number;
+  price: Numeric;
+  minimum_price: Numeric;
+  is_active: Defaulted<boolean>;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
+/** A central expense category, mapped to its chart-of-accounts expense code. */
+export interface ExpenseCategoryTable {
+  id: Generated<number>;
+  name: string;
+  account_id: number;
+  is_active: Defaulted<boolean>;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
+/** One branch, one date, one category, one description. */
+export interface ExpenseTable {
+  id: Generated<number>;
+  branch_id: number;
+  date: ColumnType<string, string, string>;
+  category_id: number;
+  amount: Numeric;
+  method: Defaulted<string>;
+  description: string;
   created_at: CreatedAt;
   updated_at: CreatedAt;
   created_by: Defaulted<number>;
@@ -958,6 +1010,12 @@ export interface LabReceivedTable {
   cust_id: number;
   branch_id: number;
   note: string | null;
+  /** The repair job type — the charge defaults from the branch's price list. */
+  repair_type_id: number | null;
+  /** What is wrong with the battery. */
+  fault: string | null;
+  /** The work actually done — required at invoicing. */
+  description: string | null;
   status: string | null;
   gross: Numeric;
   other: Numeric;
@@ -1060,6 +1118,10 @@ export interface Database {
   branch_product: BranchProductTable;
   customer: CustomerTable;
   customer_advance: CustomerAdvanceTable;
+  repair_type: RepairTypeTable;
+  branch_repair_price: BranchRepairPriceTable;
+  expense_category: ExpenseCategoryTable;
+  expense: ExpenseTable;
   sale_customer: SaleCustomerTable;
   sale: SaleTable;
   sale_detail: SaleDetailTable;
