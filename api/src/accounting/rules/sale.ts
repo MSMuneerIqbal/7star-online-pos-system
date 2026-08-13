@@ -73,8 +73,11 @@ export function postSale(input: SaleInput): Journal[] {
       credit(ACC.SALES, input.grossTotal, `Sales recorded (Gross) – ${ref}`),
       ...creditIf(ACC.SERVICE_INCOME, input.service, `Service charges – ${ref}`),
 
-      debit(ACC.COGS, input.cogs, `COGS – ${ref}`),
-      credit(ACC.INVENTORY_FINISH, input.cogs, `Inventory issued – ${ref}, Cost:${fmt(input.cogs)}`),
+      // COGS and its inventory credit are a self-balancing pair: when nothing
+      // was costed (a service-only sale, or stock with no cost yet) both legs
+      // are omitted together, so the journal still balances.
+      ...debitIf(ACC.COGS, input.cogs, `COGS – ${ref}`),
+      ...creditIf(ACC.INVENTORY_FINISH, input.cogs, `Inventory issued – ${ref}, Cost:${fmt(input.cogs)}`),
     ],
   });
 
@@ -135,8 +138,8 @@ export function postSaleReturn(input: SaleReturnInput): Journal[] {
         debit(ACC.SALES, input.netTotal, `Sales reversed – ${ref}`),
         credit(input.customerAccountId, input.netTotal, `Receivable reduced – ${ref}`),
 
-        debit(ACC.INVENTORY_FINISH, input.cogs, `Inventory returned – ${ref}`),
-        credit(ACC.COGS, input.cogs, `COGS reversed – ${ref}`),
+        ...debitIf(ACC.INVENTORY_FINISH, input.cogs, `Inventory returned – ${ref}`),
+        ...creditIf(ACC.COGS, input.cogs, `COGS reversed – ${ref}`),
       ],
     }),
   ];

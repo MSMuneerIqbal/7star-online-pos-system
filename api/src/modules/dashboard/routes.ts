@@ -65,7 +65,22 @@ export default async function dashboardRoutes(app: FastifyInstance): Promise<voi
           SELECT COALESCE(SUM(qty * price), 0)::text AS v
           FROM stock_movement WHERE kind = 'FINISH' ${branchId === null ? sql`` : sql`AND branch_id = ${branchId}`}
         `.execute(db),
-        sql<{ n: string }>`SELECT count(*)::text AS n FROM product WHERE is_active ${bScope}`.execute(db),
+        // Low stock is a per-branch concept — the threshold lives on
+        // branch_product, so the count joins that against actual on-hand.
+        sql<{ n: string }>`
+          WITH onhand AS (
+            SELECT branch_id, pid, SUM(qty) AS qty
+            FROM stock_movement WHERE kind = 'FINISH'
+            GROUP BY branch_id, pid
+          )
+          SELECT count(*)::text AS n
+          FROM branch_product bp
+          JOIN product p ON p.id = bp.product_id
+          LEFT JOIN onhand o ON o.pid = bp.product_id AND o.branch_id = bp.branch_id
+          WHERE p.is_active AND bp.is_active
+            AND COALESCE(o.qty, 0) <= bp.low_stock_threshold
+            ${branchId === null ? sql`` : sql`AND bp.branch_id = ${branchId}`}
+        `.execute(db),
         sql<{ n: string }>`
           WITH moves AS (SELECT pid, MAX(date) AS last FROM stock_movement WHERE kind = 'FINISH' ${branchId === null ? sql`` : sql`AND branch_id = ${branchId}`} GROUP BY pid)
           SELECT count(*)::text AS n FROM product p LEFT JOIN moves m ON m.pid = p.id
@@ -82,9 +97,19 @@ export default async function dashboardRoutes(app: FastifyInstance): Promise<voi
         `.execute(db),
         sql<{ v: string }>`SELECT COALESCE(SUM(qty), 0)::text AS v FROM production_output ${bWhere}`.execute(db),
         sql<{ v: string }>`SELECT COALESCE(SUM(qty), 0)::text AS v FROM warranty_claim_detail WHERE outcome IS NOT NULL ${branchId === null ? sql`` : sql`AND claim_id IN (SELECT id FROM warranty_claim WHERE branch_id = ${branchId})`}`.execute(db),
-        sql<{ v: string }>`SELECT COALESCE(SUM(gross), 0)::text AS v FROM lab ${bScope}`.execute(db),
+        sql<{ v: string }>`SELECT COALESCE(SUM(gross), 0)::text AS v FROM lab WHERE 1=1 ${bScope}`.execute(db),
         sql<{ n: string }>`SELECT count(*)::text AS n FROM estore_shipment ${bWhere}`.execute(db),
       ]);
+
+      // Branch selector for the super admin — name + id for the dropdown.
+      const branches = req.principal.isSuperAdmin
+        ? await db
+            .selectFrom('branch')
+            .select(['id', 'name'])
+            .where('id', '>', 0)
+            .orderBy('name')
+            .execute()
+        : [];
 
       return {
         hero: {
@@ -108,6 +133,7 @@ export default async function dashboardRoutes(app: FastifyInstance): Promise<voi
           salesByBranch: salesByBranch.rows,
           bestSellers: bestSellers.rows,
         },
+        branches,
       };
     },
   });

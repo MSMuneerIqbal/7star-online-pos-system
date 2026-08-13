@@ -1177,6 +1177,44 @@ export interface LabUsedTable {
   total: Numeric;
 }
 
+/** A notification for the top-bar bell — targeted at a branch or the warehouse. */
+export interface NotificationTable {
+  id: Generated<number>;
+  branch_id: number;
+  type: Defaulted<string>;
+  title: string;
+  body: string | null;
+  link: string | null;
+  is_read: Defaulted<boolean>;
+  created_at: CreatedAt;
+}
+
+/** A manual stock-count correction — the "increase / decrease" document. */
+export interface StockAdjustmentTable {
+  id: Generated<number>;
+  doc_number: string;
+  branch_id: number;
+  date: ColumnType<string, string, string>;
+  kind: string;
+  reason: string;
+  note: string | null;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
+export interface StockAdjustmentDetailTable {
+  id: Generated<number>;
+  adj_id: number;
+  pid: number;
+  pname: string | null;
+  /** Signed: positive = increase, negative = decrease. */
+  qty: Numeric;
+  price: Numeric;
+  total: Numeric;
+}
+
 // ---------------------------------------------------------------------------
 // Document numbering (phase 2)
 // ---------------------------------------------------------------------------
@@ -1257,6 +1295,9 @@ export interface Database {
   lab_detail: LabDetailTable;
   lab_used: LabUsedTable;
   setting: SettingTable;
+  notification: NotificationTable;
+  stock_adjustment: StockAdjustmentTable;
+  stock_adjustment_detail: StockAdjustmentDetailTable;
   user_logins: UserLoginsTable;
   login_history: LoginHistoryTable;
   role: RoleTable;

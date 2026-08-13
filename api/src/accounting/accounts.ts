@@ -41,6 +41,8 @@ export const ACC = {
   STOCK_LOSS: 5010103,
   /** Warranty replacements and repairs — the warehouse carries the cost. */
   WARRANTY_EXPENSE: 5010104,
+  /** Manual stock-count corrections — shrinkage (Dr) nets against surplus (Cr). */
+  STOCK_ADJUSTMENT: 5010105,
   /** Inward freight / cargo on DO receiving. */
   FREIGHT_IN: 5020201,
   /**
@@ -106,6 +108,8 @@ export const VTYPE = {
   LAB: 'LABINV',
   /** E-Store shipment — the branch ships, the warehouse accepts. */
   ESTORE: 'ESINV',
+  /** Manual stock-count correction (increase / decrease). */
+  STOCK_ADJUSTMENT: 'ADJINV',
 } as const;
 
 export type Vtype = (typeof VTYPE)[keyof typeof VTYPE];

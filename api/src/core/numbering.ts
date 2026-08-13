@@ -29,7 +29,8 @@ export type DocType =
   | 'WARRANTY'
   | 'ESTORE'
   | 'LAB'
-  | 'LAB_RECEIVED';
+  | 'LAB_RECEIVED'
+  | 'ADJUSTMENT';
 
 const DOC_CODE: Record<DocType, string | null> = {
   SALE_WALKIN: null,
@@ -47,6 +48,7 @@ const DOC_CODE: Record<DocType, string | null> = {
   ESTORE: 'ES',
   LAB: 'LB',
   LAB_RECEIVED: 'LR',
+  ADJUSTMENT: 'ADJ',
 };
 
 export interface DocumentNumber {

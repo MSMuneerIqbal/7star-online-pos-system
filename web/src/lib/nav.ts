@@ -122,7 +122,10 @@ export const NAV: readonly NavSection[] = [
   {
     headId: 10,
     title: 'Production',
-    items: [{ label: 'Production', path: '/production', action: [47, 10011], status: 'ported' }],
+    items: [
+      { label: 'Production', path: '/production', action: [47, 10011], status: 'ported' },
+      { label: 'Stock Adjustment', path: '/adjustments', action: [58, 5131], status: 'ported' },
+    ],
   },
 
   {

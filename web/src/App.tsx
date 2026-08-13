@@ -21,6 +21,7 @@ import { RemittancePage } from '@/features/remittance/RemittancePage';
 import { CustomerStatementPage } from '@/features/customer/CustomerStatementPage';
 import { ExpensePage } from '@/features/expense/ExpensePage';
 import { OpeningBalancesPage } from '@/features/opening/OpeningBalancesPage';
+import { AdjustmentPage } from '@/features/adjustment/AdjustmentPage';
 import {
   BalanceSheetPage,
   CashBookPage,
@@ -89,7 +90,15 @@ const IMPLEMENTED: Record<string, React.ComponentType> = {
 
   // One page covers what the legacy system split across ten controllers.
   '/demand-orders/raw': () => <DemandOrderPage kind="raw" />,
+  '/demand-orders/raw/requests': () => <DemandOrderPage kind="raw" initialTab="requests" />,
+  '/demand-orders/raw/transfers': () => <DemandOrderPage kind="raw" initialTab="requests" />,
+  '/demand-orders/raw/receiving': () => <DemandOrderPage kind="raw" initialTab="received" />,
+  '/demand-orders/raw/received': () => <DemandOrderPage kind="raw" initialTab="received" />,
   '/demand-orders/finish': () => <DemandOrderPage kind="finish" />,
+  '/demand-orders/finish/requests': () => <DemandOrderPage kind="finish" initialTab="requests" />,
+  '/demand-orders/finish/transfers': () => <DemandOrderPage kind="finish" initialTab="requests" />,
+  '/demand-orders/finish/receiving': () => <DemandOrderPage kind="finish" initialTab="received" />,
+  '/demand-orders/finish/received': () => <DemandOrderPage kind="finish" initialTab="received" />,
   '/remittances': RemittancePage,
   '/customers/statement': CustomerStatementPage,
   '/expenses': ExpensePage,
@@ -107,6 +116,8 @@ const IMPLEMENTED: Record<string, React.ComponentType> = {
   '/financials/balance-sheet': BalanceSheetPage,
 
   '/production': ProductionPage,
+
+  '/adjustments': AdjustmentPage,
 
   // Lab Receiving and Lab Invoices share one page — the invoice is raised from
   // the job, which is what the legacy MakeInvoice actions implied.

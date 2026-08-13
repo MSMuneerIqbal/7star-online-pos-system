@@ -40,6 +40,7 @@ interface Branch {
 interface FormData {
   products: { id: number; name: string | null }[];
   branches: Branch[];
+  warehouseId: number | null;
   kind: string;
 }
 
@@ -106,13 +107,14 @@ const StatusChip = ({ status }: { status: string | null }) => (
  * One page covering what the legacy system split across ten controllers. The
  * stock kind comes from the route; the four stages are tabs.
  */
-export function DemandOrderPage({ kind }: { kind: StockKind }) {
+export function DemandOrderPage({ kind, initialTab = 'orders' }: { kind: StockKind; initialTab?: Tab }) {
   const { hasAction } = useAuth();
 
-  const [tab, setTab] = useState<Tab>('orders');
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [page, setPage] = useState(1);
   const [composing, setComposing] = useState<'order' | 'request' | null>(null);
   const [receiving, setReceiving] = useState<RequestRow | null>(null);
+  const [delivering, setDelivering] = useState<OrderRow | null>(null);
 
   const formData = useQuery({
     queryKey: ['demand-orders', kind, 'form-data'],
@@ -184,6 +186,7 @@ export function DemandOrderPage({ kind }: { kind: StockKind }) {
         kind={kind}
         mode={composing}
         branches={formData.data?.branches ?? []}
+        warehouseId={formData.data?.warehouseId ?? null}
         products={formData.data?.products ?? []}
         onDone={() => setComposing(null)}
       />
@@ -257,22 +260,39 @@ export function DemandOrderPage({ kind }: { kind: StockKind }) {
           error={list.error ? (list.error as Error).message : null}
           emptyMessage={tab === 'orders' ? 'No demand orders yet' : 'No transfers yet'}
           actions={
-            tab === 'requests' && hasAction(perms.formId, perms.edit)
-              ? (row) => (
-                  <div className="flex justify-end gap-1">
-                    {row.status === 'DESPATCHED' && (
-                      <button
-                        type="button"
-                        title="Receive — brings stock into the destination branch"
-                        className="rounded-sm p-1.5 text-slate-500 hover:bg-emerald-50 hover:text-emerald-700"
-                        onClick={() => setReceiving(row)}
-                      >
-                        <PackageCheck className="size-3.5" />
-                      </button>
-                    )}
-                  </div>
-                )
-              : undefined
+            tab === 'orders'
+              ? hasAction(PERMS[kind].requests.formId, PERMS[kind].requests.create)
+                ? (row) => (
+                    <div className="flex justify-end gap-1">
+                      {row.status === 'PENDING' && (
+                        <button
+                          type="button"
+                          className="btn-primary px-2 py-1 text-xs"
+                          onClick={() => setDelivering(row as OrderRow)}
+                        >
+                          <Truck className="size-3.5" />
+                          Deliver
+                        </button>
+                      )}
+                    </div>
+                  )
+                : undefined
+              : tab === 'requests' && hasAction(perms.formId, perms.edit)
+                ? (row) => (
+                    <div className="flex justify-end gap-1">
+                      {row.status === 'DESPATCHED' && (
+                        <button
+                          type="button"
+                          title="Receive — brings stock into the destination branch"
+                          className="rounded-sm p-1.5 text-slate-500 hover:bg-emerald-50 hover:text-emerald-700"
+                          onClick={() => setReceiving(row)}
+                        >
+                          <PackageCheck className="size-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )
+                : undefined
           }
         />
       )}
@@ -291,6 +311,13 @@ export function DemandOrderPage({ kind }: { kind: StockKind }) {
         request={receiving}
         branchName={branchName}
         onClose={() => setReceiving(null)}
+      />
+
+      <DeliverDialog
+        kind={kind}
+        order={delivering}
+        branchName={branchName}
+        onClose={() => setDelivering(null)}
       />
     </>
   );
@@ -485,24 +512,164 @@ function ReceiveDialog({
   );
 }
 
+function DeliverDialog({
+  kind,
+  order,
+  branchName,
+  onClose,
+}: {
+  kind: StockKind;
+  order: OrderRow | null;
+  branchName: (id: number) => string;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [lines, setLines] = useState<Array<{ pid: number; pname: string; qty: string; wholesale: string }>>([]);
+  const [seeded, setSeeded] = useState('');
+
+  const detail = useQuery({
+    queryKey: ['demand-orders', kind, 'orders', order?.id],
+    queryFn: () =>
+      api.get<{ lines: Array<{ pid: number; pname: string | null; qty: string; price: string }> }>(
+        `/demand-orders/${kind}/orders/${order?.id}`,
+      ),
+    enabled: order !== null,
+  });
+
+  // Seed delivered quantities and wholesale from the ordered lines.
+  const seedKey = detail.data?.lines.map((l) => `${l.pid}:${l.qty}:${l.price}`).join('|') ?? '';
+  if (order && detail.data && seeded !== seedKey) {
+    setSeeded(seedKey);
+    setLines(
+      detail.data.lines.map((l) => ({
+        pid: l.pid,
+        pname: l.pname ?? '',
+        qty: l.qty,
+        wholesale: l.price ?? '0',
+      })),
+    );
+  }
+
+  const deliver = useMutation({
+    mutationFn: () =>
+      api.post(`/demand-orders/${kind}/orders/${order?.id}/deliver`, {
+        date: today(),
+        lines: lines.map((l) => ({ pid: l.pid, qty: l.qty, wholesalePrice: l.wholesale })),
+      }),
+    onSuccess: () => {
+      toast.success('Delivered — stock is now in the branch');
+      void queryClient.invalidateQueries({ queryKey: ['demand-orders', kind] });
+      void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      onClose();
+      setLines([]);
+      setSeeded('');
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'Could not deliver'),
+  });
+
+  const update = (pid: number, patch: Partial<{ qty: string; wholesale: string }>) =>
+    setLines((ls) => ls.map((l) => (l.pid === pid ? { ...l, ...patch } : l)));
+
+  return (
+    <Modal
+      open={order !== null}
+      title={`Deliver order ${order?.doc_number ?? `#${order?.id ?? ''}`}`}
+      size="lg"
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={deliver.isPending}
+            onClick={() => deliver.mutate()}
+          >
+            {deliver.isPending ? 'Delivering…' : 'Deliver'}
+          </button>
+        </>
+      }
+    >
+      {order && (
+        <>
+          <p className="mb-3 text-sm text-slate-600">
+            {branchName(order.from_branch)} → {branchName(order.to_branch)}. Delivering approves the
+            order and puts the stock straight onto the receiving branch's shelves.
+          </p>
+
+          <div className="overflow-x-auto rounded-md border border-slate-200">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase">
+                  <th className="px-2 py-2 text-left">Item</th>
+                  <th className="w-24 px-2 py-2 text-right">Qty</th>
+                  <th className="w-28 px-2 py-2 text-right">Wholesale</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((l) => (
+                  <tr key={l.pid} className="border-b border-slate-100 last:border-0">
+                    <td className="px-2 py-1">{l.pname}</td>
+                    <td className="px-2 py-1">
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        className="field-input py-1 text-right tabular"
+                        aria-label={`Quantity for ${l.pname}`}
+                        value={l.qty}
+                        onChange={(e) => update(l.pid, { qty: e.target.value })}
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        className="field-input py-1 text-right tabular"
+                        aria-label={`Wholesale price for ${l.pname}`}
+                        value={l.wholesale}
+                        onChange={(e) => update(l.pid, { wholesale: e.target.value })}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 function TransferComposer({
   kind,
   mode,
   branches,
+  warehouseId,
   products,
   onDone,
 }: {
   kind: StockKind;
   mode: 'order' | 'request';
   branches: Branch[];
+  warehouseId: number | null;
   products: { id: number; name: string | null }[];
   onDone: () => void;
 }) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const isSuper = user?.isSuperAdmin ?? false;
+  const ownBranchId = user?.branchId ?? null;
 
   const [date, setDate] = useState(today());
-  const [fromBranchId, setFromBranchId] = useState<number | null>(null);
-  const [toBranchId, setToBranchId] = useState<number | null>(null);
+  const [fromBranchId, setFromBranchId] = useState<number | null>(
+    isSuper ? null : warehouseId,
+  );
+  const [toBranchId, setToBranchId] = useState<number | null>(isSuper ? null : ownBranchId);
   const [doId, setDoId] = useState<number | null>(null);
   const [note, setNote] = useState('');
   const [lines, setLines] = useState<InvoiceLine[]>([emptyLine()]);
@@ -609,6 +776,7 @@ function TransferComposer({
                 id="from"
                 className="field-input"
                 value={fromBranchId ?? ''}
+                disabled={!isSuper}
                 onChange={(e) => setFromBranchId(e.target.value ? Number(e.target.value) : null)}
               >
                 <option value="">Select…</option>
@@ -628,6 +796,7 @@ function TransferComposer({
                 id="to"
                 className="field-input"
                 value={toBranchId ?? ''}
+                disabled={!isSuper}
                 onChange={(e) => setToBranchId(e.target.value ? Number(e.target.value) : null)}
               >
                 <option value="">Select…</option>

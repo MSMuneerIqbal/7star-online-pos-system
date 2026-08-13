@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
@@ -38,6 +39,7 @@ interface DashboardData {
     salesByBranch: Array<{ name: string; total: string }>;
     bestSellers: Array<{ name: string; qty: string }>;
   };
+  branches: Array<{ id: number; name: string | null }>;
 }
 
 const tooltipStyle = {
@@ -50,10 +52,12 @@ const tooltipStyle = {
 export function DashboardPage() {
   const { user } = useAuth();
   const isSuper = user?.isSuperAdmin ?? false;
+  const [branchId, setBranchId] = useState<number | null>(null);
 
   const { data } = useQuery({
-    queryKey: ['dashboard'],
-    queryFn: () => api.get<DashboardData>('/dashboard'),
+    queryKey: ['dashboard', branchId],
+    queryFn: () =>
+      api.get<DashboardData>(branchId === null ? '/dashboard' : `/dashboard?branchId=${branchId}`),
   });
 
   const current = Number(data?.hero.month ?? 0);
@@ -75,7 +79,27 @@ export function DashboardPage() {
 
   return (
     <>
-      <PageHeader title="Dashboard" subtitle={`Signed in as ${user?.username} — ${user?.branchName}`} />
+      <PageHeader
+        title="Dashboard"
+        subtitle={`Signed in as ${user?.username} — ${user?.branchName}`}
+        actions={
+          isSuper && (
+            <select
+              className="field-input w-48"
+              aria-label="Select branch"
+              value={branchId ?? ''}
+              onChange={(e) => setBranchId(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">All branches</option>
+              {(data?.branches ?? []).map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          )
+        }
+      />
 
       {/* The one hero figure */}
       <div className="card mb-4 p-4">

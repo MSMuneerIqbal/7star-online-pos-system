@@ -190,6 +190,16 @@ describe('sale posting', () => {
     expect(cogs?.dr).toBe('800.00');
     expect(inv?.cr).toBe('800.00');
   });
+
+  it('omits the COGS legs entirely when nothing was costed', () => {
+    // A service-only sale, or stock with no cost yet, must still post — the
+    // empty-leg error was the go-live crash this guards against.
+    const [invoice] = postSale({ ...sale, cogs: '0.00' });
+
+    expect(invoice!.legs.some((l) => l.accountId === ACC.COGS)).toBe(false);
+    expect(invoice!.legs.some((l) => l.accountId === ACC.INVENTORY_FINISH)).toBe(false);
+    expect(totals(invoice!.legs).imbalance).toBe('0.00');
+  });
 });
 
 // ---------------------------------------------------------------------------

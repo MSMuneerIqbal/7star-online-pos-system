@@ -68,12 +68,19 @@ export default async function demandOrderRoutes(app: FastifyInstance): Promise<v
 
       const branches = await db
         .selectFrom('branch')
-        .select(['id', 'name'])
+        .select(['id', 'name', 'type'])
         .where('id', '>', 0)
         .orderBy('name')
         .execute();
 
-      return { products, branches, kind: stockKind };
+      const warehouse = branches.find((b) => b.type === 'WAREHOUSE');
+
+      return {
+        products,
+        branches: branches.map(({ id, name }) => ({ id, name })),
+        warehouseId: warehouse?.id ?? null,
+        kind: stockKind,
+      };
     },
   });
 
@@ -122,6 +129,65 @@ export default async function demandOrderRoutes(app: FastifyInstance): Promise<v
 
       const result = await service.createOrder(req.principal, { ...body, kind: toKind(kind) });
       return reply.status(201).send(result);
+    },
+  });
+
+  /**
+   * Deliver a pending demand order — approve, dispatch and receive in one step.
+   * The stock leaves the warehouse and lands in the requesting branch's own
+   * stock in a single transaction, so no separate "receive" step is needed.
+   */
+  app.post('/:kind/orders/:id/deliver', {
+    preHandler: guard('REQUEST', ACTION.NEW),
+    handler: async (req, reply) => {
+      const { kind } = kindParam.parse(req.params);
+      const { id } = idParam.parse(req.params);
+      const body = z
+        .object({
+          date: dateString,
+          note: z.string().max(1000).nullish(),
+          lines: z
+            .array(
+              z.object({
+                pid: z.coerce.number().int().positive(),
+                qty: decimalString,
+                wholesalePrice: decimalString,
+                grade: z.enum(['NEW', 'REPAIRED']).optional(),
+              }),
+            )
+            .optional(),
+        })
+        .parse(req.body);
+
+      const result = await service.deliverOrder(req.principal, { ...body, doId: id, kind: toKind(kind) });
+      return reply.status(201).send(result);
+    },
+  });
+
+  /** Order detail — the deliver dialog reads the asked quantities from here. */
+  app.get('/:kind/orders/:id', {
+    preHandler: guard('ORDER', ACTION.VIEW),
+    handler: async (req) => {
+      const { kind } = kindParam.parse(req.params);
+      const { id } = idParam.parse(req.params);
+
+      const order = await db
+        .selectFrom('demand_order')
+        .selectAll()
+        .where('id', '=', id)
+        .where('type', '=', toKind(kind))
+        .executeTakeFirst();
+
+      if (!order) throw notFound('Demand order');
+
+      const lines = await db
+        .selectFrom('demand_order_detail')
+        .selectAll()
+        .where('inv_id', '=', id)
+        .orderBy('id')
+        .execute();
+
+      return { ...order, lines };
     },
   });
 
