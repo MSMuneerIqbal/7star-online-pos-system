@@ -209,6 +209,7 @@ export const NAV: readonly NavSection[] = [
           { label: 'Balance Sheet', path: '/financials/balance-sheet', action: [30, 7081], status: 'ported' },
         ],
       },
+      { label: 'Opening Balances', path: '/opening', action: [25, 7031], status: 'ported' },
     ],
   },
 

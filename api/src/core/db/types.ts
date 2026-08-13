@@ -588,6 +588,21 @@ export interface EstoreShipmentDetailTable {
   total: Numeric;
 }
 
+/** Opening stock — inventory on the shelves on day one, with its value. */
+export interface OpeningStockTable {
+  id: Generated<number>;
+  branch_id: number;
+  kind: string;
+  pid: number;
+  qty: Numeric;
+  cost: Numeric;
+  date: ColumnType<string, string, string>;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
 /** Single-row company profile. Supplies the header on every printed document. */
 export interface SettingTable {
   id: Generated<number>;
@@ -1208,6 +1223,7 @@ export interface Database {
   warranty_part: WarrantyPartTable;
   estore_shipment: EstoreShipmentTable;
   estore_shipment_detail: EstoreShipmentDetailTable;
+  opening_stock: OpeningStockTable;
   sale_customer: SaleCustomerTable;
   sale: SaleTable;
   sale_detail: SaleDetailTable;

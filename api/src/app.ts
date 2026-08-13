@@ -32,6 +32,7 @@ import expenseRoutes from './modules/expense/routes.js';
 import warrantyRoutes from './modules/warranty/routes.js';
 import estoreRoutes from './modules/estore/routes.js';
 import dashboardRoutes from './modules/dashboard/routes.js';
+import openingRoutes from './modules/opening/routes.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -117,6 +118,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(warrantyRoutes, { prefix: '/api/v1/warranty' });
   await app.register(estoreRoutes, { prefix: '/api/v1/estore' });
   await app.register(dashboardRoutes, { prefix: '/api/v1/dashboard' });
+  await app.register(openingRoutes, { prefix: '/api/v1/opening' });
 
   // Remaining feature modules land here as phases 4-10 land:
   //   await app.register(brandRoutes, { prefix: '/api/v1/brands' });

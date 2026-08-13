@@ -57,6 +57,8 @@ export const ACC = {
    * Mirrored by one per-branch "due to warehouse" account; the pair nets to zero.
    */
   INTER_BRANCH_DUE: 1010502,
+  /** The balancing side of every opening entry — the owner's capital. */
+  OWNER_CAPITAL: 3010101,
 } as const;
 
 /**

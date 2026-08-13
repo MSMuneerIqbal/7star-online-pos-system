@@ -62,10 +62,14 @@ a phased reshape in motion. Six phases have landed since:
 - **Dashboards** (PLAN.md Phase 12) — Recharts wrapped once in a Chart component
   that applies the DESIGN.md tokens; a hero figure plus per-branch figures, and
   (for the super admin) the sales trend, sales-by-branch and best-sellers charts.
+- **Opening balances** (PLAN.md Phase 13) — the day-one starting numbers: opening
+  stock (Dr inventory / Cr owner capital plus a stock movement), and opening
+  balances for cash/bank, receivables, payables and dues (migration
+  `1700000000027`).
 
-The last phase (13 — opening balances and go-live) has not started. Treat the
-table below as "what the original port covered," not "what PLAN.md considers
-done."
+That completes the phased build. The figures themselves (cash, bank, stock on
+hand, what customers owe, what is owed to suppliers) are the owner's to enter on
+the Opening Balances screen before trading begins.
 
 | Area | State |
 |---|---|
@@ -78,7 +82,7 @@ done."
 | Audit log | Done |
 | Posting engine — rules | Done — 30 tests |
 | Posting engine — DB writer | Done — **14 tests against real Postgres** |
-| Migrations | **Applied** — through `1700000000026` on Neon |
+| Migrations | **Applied** — through `1700000000027` on Neon |
 | Permission tree | **Reconstructed from the legacy UI** — 150/150 ids verified |
 | Catalog split — master `product` + `branch_product` | Done — PLAN.md Phase 1 |
 | Branch module (form 2) | Done — full CRUD, verified in a browser |
@@ -98,7 +102,7 @@ done."
 | All 8 registration screens | Done — party accounts minted atomically |
 | Legacy `.mdf` extract + ETL tooling | **Written, cannot run, not needed** — see "Starting fresh" below |
 
-`npm test` → 164 passing. `npm run typecheck` → clean.
+`npm test` → 165 passing. `npm run typecheck` → clean.
 
 ### Four accounting defects found and fixed
 
