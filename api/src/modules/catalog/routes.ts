@@ -18,6 +18,7 @@ import { formPermissions, likeTerm, listQuery, offset, paged } from '../../core/
 
 const PRODUCT_TYPES = ['NEW', 'BRANDED', 'CHARGER', 'STORAGE', 'OTHER'] as const;
 const PRODUCT_PLACEMENTS = ['INT', 'EXT'] as const;
+const RAW_PART_TYPES = ['CELL', 'COMPLETE_SET', 'OTHER'] as const;
 
 const BRAND = formPermissions(3, 202);
 const CATEGORY = formPermissions(4, 203);
@@ -26,6 +27,48 @@ const PRODUCT = formPermissions(6, 205);
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 const decimal = z.union([z.string(), z.number()]).transform(String);
+
+/** One raw item, whatever shape — CELL, COMPLETE_SET or OTHER. */
+const rawItemBody = z.object({
+  name: z.string().trim().min(1, 'Name is required').max(200),
+  price: decimal.default('0'),
+  reorder: decimal.default('0'),
+  brandId: z.coerce.number().int().positive().nullish(),
+  catId: z.coerce.number().int().positive().nullish(),
+  partType: z.enum(RAW_PART_TYPES).default('OTHER'),
+  model: z.string().trim().max(200).nullish(),
+  placement: z.enum(PRODUCT_PLACEMENTS).nullish(),
+  cellCapacityMah: z.coerce.number().int().positive().nullish(),
+  cellVoltage: decimal.nullish(),
+  cellSize: z.string().trim().max(50).nullish(),
+  cellBrand: z.string().trim().max(100).nullish(),
+  isActive: z.boolean().default(true),
+});
+
+/**
+ * Cell fields belong to cells only (DB CHECK enforces it) — a complete set or
+ * other part never carries a cell specification, so they are dropped on the
+ * floor for anything that is not a CELL.
+ */
+function rawProductValues(body: z.infer<typeof rawItemBody>) {
+  const isCell = body.partType === 'CELL';
+
+  return {
+    name: body.name,
+    price: body.price,
+    reorder: body.reorder,
+    brand_id: body.brandId ?? null,
+    cat_id: body.catId ?? null,
+    part_type: body.partType,
+    model: body.model ?? null,
+    placement: body.placement ?? null,
+    cell_capacity_mah: isCell ? (body.cellCapacityMah ?? null) : null,
+    cell_voltage: isCell ? (body.cellVoltage ?? null) : null,
+    cell_size: isCell ? (body.cellSize ?? null) : null,
+    cell_brand: isCell ? (body.cellBrand ?? null) : null,
+    is_active: body.isActive,
+  };
+}
 
 export default async function catalogRoutes(app: FastifyInstance): Promise<void> {
   // -------------------------------------------------------------------------
@@ -331,20 +374,39 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
     preHandler: app.requireAction(RAW.formId, RAW.view),
     handler: async (req) => {
       const q = listQuery.parse(req.query);
+      const { partType } = z.object({ partType: z.enum(RAW_PART_TYPES).optional() }).parse(req.query);
 
       let base = db
         .selectFrom('raw_product')
         .leftJoin('brand', 'brand.id', 'raw_product.brand_id')
         .leftJoin('category', 'category.id', 'raw_product.cat_id');
 
+      if (partType) base = base.where('raw_product.part_type', '=', partType);
+
       const term = likeTerm(q.search);
-      if (term) base = base.where('raw_product.name', 'ilike', term);
+      if (term) {
+        // A cell is found by its specification, not only its name.
+        base = base.where((eb) =>
+          eb.or([
+            eb('raw_product.name', 'ilike', term),
+            eb('raw_product.model', 'ilike', term),
+            eb('raw_product.cell_brand', 'ilike', term),
+          ]),
+        );
+      }
 
       const [rows, count] = await Promise.all([
         base
           .select([
             'raw_product.id',
             'raw_product.name',
+            'raw_product.part_type',
+            'raw_product.model',
+            'raw_product.placement',
+            'raw_product.cell_capacity_mah',
+            'raw_product.cell_voltage',
+            'raw_product.cell_size',
+            'raw_product.cell_brand',
             'raw_product.price',
             'raw_product.reorder',
             'raw_product.is_active',
@@ -365,16 +427,12 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
   app.post('/raw-products', {
     preHandler: app.requireAction(RAW.formId, RAW.create),
     handler: async (req, reply) => {
-      const body = z
-        .object({
-          name: z.string().trim().min(1, 'Name is required').max(200),
-          price: decimal.default('0'),
-          reorder: decimal.default('0'),
-          brandId: z.coerce.number().int().positive().nullish(),
-          catId: z.coerce.number().int().positive().nullish(),
-          isActive: z.boolean().default(true),
-        })
-        .parse(req.body);
+      // Raw items are master catalog (SPECS §3.3): a branch never registers one.
+      if (!req.principal.isSuperAdmin) {
+        throw forbidden('Only the super admin can register a raw item');
+      }
+
+      const body = rawItemBody.parse(req.body);
 
       const clash = await db
         .selectFrom('raw_product')
@@ -388,12 +446,7 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
         const created = await tx
           .insertInto('raw_product')
           .values({
-            name: body.name,
-            price: body.price,
-            reorder: body.reorder,
-            brand_id: body.brandId ?? null,
-            cat_id: body.catId ?? null,
-            is_active: body.isActive,
+            ...rawProductValues(body),
             created_by: req.principal.empId,
             updated_by: req.principal.empId,
           })
@@ -421,17 +474,12 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
   app.put('/raw-products/:id', {
     preHandler: app.requireAction(RAW.formId, RAW.edit),
     handler: async (req) => {
+      if (!req.principal.isSuperAdmin) {
+        throw forbidden('Only the super admin can edit a raw item');
+      }
+
       const { id } = idParam.parse(req.params);
-      const body = z
-        .object({
-          name: z.string().trim().min(1).max(200),
-          price: decimal,
-          reorder: decimal.default('0'),
-          brandId: z.coerce.number().int().positive().nullish(),
-          catId: z.coerce.number().int().positive().nullish(),
-          isActive: z.boolean().default(true),
-        })
-        .parse(req.body);
+      const body = rawItemBody.parse(req.body);
 
       const existing = await db
         .selectFrom('raw_product')
@@ -445,12 +493,7 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
         const row = await tx
           .updateTable('raw_product')
           .set({
-            name: body.name,
-            price: body.price,
-            reorder: body.reorder,
-            brand_id: body.brandId ?? null,
-            cat_id: body.catId ?? null,
-            is_active: body.isActive,
+            ...rawProductValues(body),
             updated_at: new Date(),
             updated_by: req.principal.empId,
           })
@@ -544,13 +587,13 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
         branches = branches.where('id', '=', req.principal.branchId);
       }
 
-      // Phase 3 (raw items) will add a part_type column to tell cells apart
-      // from other raw stock; until then every active raw item is offered as
-      // a candidate recipe.
+      // Cells are the suggested recipe for a finished product — only cells,
+      // never complete sets or other parts.
       const cellTypes = db
         .selectFrom('raw_product')
         .select(['id', 'name'])
         .where('is_active', '=', true)
+        .where('part_type', '=', 'CELL')
         .orderBy('name');
 
       const [brandRows, categoryRows, branchRows, cellTypeRows] = await Promise.all([
@@ -568,6 +611,11 @@ export default async function catalogRoutes(app: FastifyInstance): Promise<void>
         placements: [
           { id: 'INT', name: 'Internal' },
           { id: 'EXT', name: 'External' },
+        ],
+        partTypes: [
+          { id: 'CELL', name: 'Cell' },
+          { id: 'COMPLETE_SET', name: 'Complete Set' },
+          { id: 'OTHER', name: 'Other part' },
         ],
         cellTypes: cellTypeRows,
       };

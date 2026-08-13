@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { Download, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -8,6 +8,7 @@ import { fmtMoney } from '@/lib/money';
 import { DataTable, Pagination, type Column } from '@/components/ui/DataTable';
 import { Modal } from '@/components/ui/Modal';
 import { Field, PageHeader } from '@/components/ui/Field';
+import { ImportModal } from '@/components/import/ImportModal';
 
 /**
  * One page driving all seven registration screens.
@@ -31,6 +32,8 @@ interface FieldSpec {
   /** Half-width in the modal grid. */
   half?: boolean;
   default?: string | boolean;
+  /** Render (and submit) this field only when another field equals a value. */
+  showIf?: { field: string; equals: string | boolean };
 }
 
 export interface RegistrationConfig {
@@ -51,6 +54,10 @@ export interface RegistrationConfig {
    * split): a product model belongs to no branch, only its price does.
    */
   noBranchScope?: boolean;
+  /** Excel import endpoints, when this screen supports importing rows. */
+  import?: { previewPath: string; commitPath: string };
+  /** Sample template download, so the operator knows the expected columns. */
+  sample?: { kind: string; fileName: string };
 }
 
 interface Paged<T> {
@@ -62,6 +69,13 @@ interface Paged<T> {
 
 const text = (key: string) => (r: Record<string, unknown>) => String(r[key] ?? '—');
 const money = (key: string) => (r: Record<string, unknown>) => fmtMoney(String(r[key] ?? '0'));
+
+const PART_TYPE_LABEL: Record<string, string> = {
+  CELL: 'Cell',
+  COMPLETE_SET: 'Complete Set',
+  OTHER: 'Other',
+};
+const partTypeCell = (r: Record<string, unknown>) => PART_TYPE_LABEL[String(r.part_type)] ?? '—';
 
 const yesNo = (key: string) => (r: Record<string, unknown>) =>
   r[key] ? (
@@ -84,6 +98,7 @@ export const BRAND: RegistrationConfig = {
   subtitle: 'Manufacturers and marques',
   singular: 'Brand',
   permissions: { formId: 3, create: 2022, edit: 2023, remove: 2024 },
+  sample: { kind: 'brand', fileName: 'brand-template.xlsx' },
   columns: [
     { key: 'id', header: 'ID', numeric: true, width: '4rem' },
     { key: 'name', header: 'Name' },
@@ -108,6 +123,7 @@ export const CATEGORY: RegistrationConfig = {
   subtitle: 'How items are grouped',
   singular: 'Category',
   permissions: { formId: 4, create: 2032, edit: 2033, remove: 2034 },
+  sample: { kind: 'category', fileName: 'category-template.xlsx' },
   columns: [
     { key: 'id', header: 'ID', numeric: true, width: '4rem' },
     { key: 'name', header: 'Name' },
@@ -129,13 +145,18 @@ export const CATEGORY: RegistrationConfig = {
 export const RAW_PRODUCT: RegistrationConfig = {
   endpoint: 'raw-products',
   title: 'Raw Item',
-  subtitle: 'Materials consumed by production and lab work',
+  subtitle: 'Cells, complete sets and other parts — the master catalog production consumes',
   singular: 'Raw item',
   optionsEndpoint: 'catalog-options',
+  noBranchScope: true,
   permissions: { formId: 5, create: 2042, edit: 2043, remove: 2044 },
+  import: { previewPath: '/import/raw-products/preview', commitPath: '/import/raw-products/commit' },
+  sample: { kind: 'raw-item', fileName: 'raw-item-template.xlsx' },
   columns: [
     { key: 'id', header: 'ID', numeric: true, width: '4rem' },
     { key: 'name', header: 'Name' },
+    { key: 'part_type', header: 'Type', width: '7rem', cell: partTypeCell },
+    { key: 'model', header: 'Model', cell: text('model') },
     { key: 'brand_name', header: 'Brand', cell: text('brand_name') },
     { key: 'category_name', header: 'Category', cell: text('category_name') },
     { key: 'price', header: 'Cost', numeric: true, cell: money('price') },
@@ -145,6 +166,19 @@ export const RAW_PRODUCT: RegistrationConfig = {
   fields: [
     { name: 'name', label: 'Name', required: true },
     {
+      name: 'partType',
+      label: 'Part type',
+      kind: 'select',
+      optionsKey: 'partTypes',
+      half: true,
+      required: true,
+      default: 'OTHER',
+    },
+    { name: 'model', label: 'Model', half: true },
+    { name: 'placement', label: 'Placement', kind: 'select', optionsKey: 'placements', half: true },
+    { name: 'brandId', label: 'Brand', kind: 'select', optionsKey: 'brands', half: true },
+    { name: 'catId', label: 'Category', kind: 'select', optionsKey: 'categories', half: true },
+    {
       name: 'price',
       label: 'Cost price',
       kind: 'money',
@@ -153,8 +187,33 @@ export const RAW_PRODUCT: RegistrationConfig = {
       hint: 'Used to value purchases, production and lab consumption.',
     },
     { name: 'reorder', label: 'Reorder level', kind: 'number', half: true, default: '0' },
-    { name: 'brandId', label: 'Brand', kind: 'select', optionsKey: 'brands', half: true },
-    { name: 'catId', label: 'Category', kind: 'select', optionsKey: 'categories', half: true },
+    {
+      name: 'cellBrand',
+      label: 'Cell brand',
+      half: true,
+      showIf: { field: 'partType', equals: 'CELL' },
+    },
+    {
+      name: 'cellCapacityMah',
+      label: 'Capacity (mAh)',
+      kind: 'number',
+      half: true,
+      showIf: { field: 'partType', equals: 'CELL' },
+    },
+    {
+      name: 'cellVoltage',
+      label: 'Voltage (V)',
+      kind: 'number',
+      half: true,
+      showIf: { field: 'partType', equals: 'CELL' },
+    },
+    {
+      name: 'cellSize',
+      label: 'Physical size',
+      half: true,
+      showIf: { field: 'partType', equals: 'CELL' },
+      hint: 'e.g. 18650',
+    },
     { name: 'isActive', label: 'Active', kind: 'checkbox', default: true },
   ],
 };
@@ -169,6 +228,7 @@ export const PRODUCT: RegistrationConfig = {
   // split) — super-admin-only writes, no branch picker.
   noBranchScope: true,
   permissions: { formId: 6, create: 2052, edit: 2053, remove: 2056 },
+  sample: { kind: 'product', fileName: 'product-template.xlsx' },
   columns: [
     { key: 'id', header: 'ID', numeric: true, width: '4rem' },
     { key: 'name', header: 'Name' },
@@ -222,6 +282,7 @@ export const CUSTOMER: RegistrationConfig = {
   singular: 'Customer',
   mintsAccount: true,
   permissions: { formId: 7, create: 2062, edit: 2063, remove: 2064 },
+  sample: { kind: 'customer', fileName: 'customer-template.xlsx' },
   columns: [
     { key: 'id', header: 'ID', numeric: true, width: '4rem' },
     { key: 'name', header: 'Name' },
@@ -251,6 +312,7 @@ export const SUPPLIER: RegistrationConfig = {
   singular: 'Vendor',
   mintsAccount: true,
   permissions: { formId: 8, create: 2072, edit: 2073, remove: 2074 },
+  sample: { kind: 'supplier', fileName: 'supplier-template.xlsx' },
   columns: [
     { key: 'id', header: 'ID', numeric: true, width: '4rem' },
     { key: 'name', header: 'Name' },
@@ -283,6 +345,7 @@ export const EMPLOYEE: RegistrationConfig = {
   mintsAccount: true,
   optionsEndpoint: 'employee-options',
   permissions: { formId: 9, create: 2082, edit: 2083, remove: 2084 },
+  sample: { kind: 'employee', fileName: 'employee-template.xlsx' },
   columns: [
     { key: 'id', header: 'ID', numeric: true, width: '4rem' },
     {
@@ -319,6 +382,7 @@ export function RegistrationPage({ config }: { config: RegistrationConfig }) {
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [form, setForm] = useState<Record<string, unknown>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
@@ -351,6 +415,11 @@ export function RegistrationPage({ config }: { config: RegistrationConfig }) {
       config.fields.map((f) => [f.name, f.default ?? (f.kind === 'checkbox' ? false : '')]),
     );
 
+  const showIfMet = (cond: { field: string; equals: string | boolean }) =>
+    form[cond.field] === cond.equals;
+
+  const visibleFields = config.fields.filter((f) => !f.showIf || showIfMet(f.showIf));
+
   const close = () => {
     setCreating(false);
     setEditing(null);
@@ -360,9 +429,15 @@ export function RegistrationPage({ config }: { config: RegistrationConfig }) {
 
   const save = useMutation({
     mutationFn: () => {
-      // Blank optional text fields go as null rather than empty string.
+      // Blank optional text fields go as null rather than empty string, and a
+      // field hidden by showIf is submitted as null so a stale value can't
+      // survive (e.g. cell specs when the part type is not a cell).
       const payload: Record<string, unknown> = {};
       for (const f of config.fields) {
+        if (f.showIf && !showIfMet(f.showIf)) {
+          payload[f.name] = null;
+          continue;
+        }
         const v = form[f.name];
         payload[f.name] = v === '' ? null : v;
       }
@@ -403,6 +478,23 @@ export function RegistrationPage({ config }: { config: RegistrationConfig }) {
     config.permissions.remove !== undefined &&
     hasAction(config.permissions.formId, config.permissions.remove);
 
+  const downloadSample = async () => {
+    if (!config.sample) return;
+    try {
+      const blob = await api.download(`/import/template/${config.sample.kind}`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = config.sample.fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not download the sample');
+    }
+  };
+
   const renderField = (f: FieldSpec): ReactNode => {
     const value = form[f.name];
 
@@ -433,7 +525,7 @@ export function RegistrationPage({ config }: { config: RegistrationConfig }) {
             value={(value as string) ?? ''}
             onChange={(e) => setForm({ ...form, [f.name]: e.target.value || null })}
           >
-            <option value="">None</option>
+            {!f.required && <option value="">None</option>}
             {opts.map((o) => (
               <option key={o.id} value={o.id}>
                 {o.name}
@@ -466,19 +558,33 @@ export function RegistrationPage({ config }: { config: RegistrationConfig }) {
         title={config.title}
         subtitle={config.subtitle}
         actions={
-          canCreate && (
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={() => {
-                setForm(defaults());
-                setCreating(true);
-              }}
-            >
-              <Plus className="size-3.5" />
-              New {config.singular}
-            </button>
-          )
+          <div className="flex gap-2">
+            {canCreate && (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  setForm(defaults());
+                  setCreating(true);
+                }}
+              >
+                <Plus className="size-3.5" />
+                New {config.singular}
+              </button>
+            )}
+            {config.import && canCreate && user?.isSuperAdmin && (
+              <button type="button" className="btn-secondary" onClick={() => setImporting(true)}>
+                <Upload className="size-3.5" />
+                Import
+              </button>
+            )}
+            {config.sample && (
+              <button type="button" className="btn-secondary" onClick={() => void downloadSample()}>
+                <Download className="size-3.5" />
+                Sample
+              </button>
+            )}
+          </div>
         }
       />
 
@@ -586,7 +692,7 @@ export function RegistrationPage({ config }: { config: RegistrationConfig }) {
         )}
 
         <div className="grid gap-3 sm:grid-cols-2">
-          {config.fields.map((f) => (
+          {visibleFields.map((f) => (
             <div key={f.name} className={f.half ? '' : 'sm:col-span-2'}>
               {renderField(f)}
             </div>
@@ -614,6 +720,17 @@ export function RegistrationPage({ config }: { config: RegistrationConfig }) {
           )}
         </div>
       </Modal>
+
+      {config.import && (
+        <ImportModal
+          open={importing}
+          title={`Import ${config.title}`}
+          previewPath={config.import.previewPath}
+          commitPath={config.import.commitPath}
+          onClose={() => setImporting(false)}
+          onImported={() => void queryClient.invalidateQueries({ queryKey: [config.endpoint] })}
+        />
+      )}
     </>
   );
 }

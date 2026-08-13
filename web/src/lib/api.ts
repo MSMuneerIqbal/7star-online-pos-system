@@ -89,8 +89,16 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
 
+  return handleResponse<T>(res, path, options);
+}
+
+async function handleResponse<T>(
+  res: Response,
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
   // One transparent retry after a token refresh.
-  if (res.status === 401 && !_retried && !path.startsWith('/auth/')) {
+  if (res.status === 401 && !options._retried && !path.startsWith('/auth/')) {
     const fresh = await refreshAccessToken();
     if (fresh) return request<T>(path, { ...options, _retried: true });
   }
@@ -111,10 +119,49 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   return payload as T;
 }
 
+/** Multipart upload — no JSON content-type, so the browser sets the boundary. */
+export async function upload<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    body: form,
+  });
+
+  return handleResponse<T>(res, path, { method: 'POST' });
+}
+
+/** Download a binary file (with auth + retry), returning a Blob. */
+export async function downloadBlob(path: string): Promise<Blob> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'GET',
+    credentials: 'include',
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+  });
+
+  if (res.status === 401) {
+    const fresh = await refreshAccessToken();
+    if (fresh) return downloadBlob(path);
+  }
+
+  if (!res.ok) {
+    const payload: unknown = await res.json().catch(() => null);
+    const err =
+      payload && typeof payload === 'object' && 'error' in payload
+        ? (payload.error as { code: string; message: string })
+        : { code: 'INTERNAL', message: res.statusText };
+    throw new ApiError(res.status, err.code, err.message);
+  }
+
+  return res.blob();
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path, { method: 'GET' }),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  upload: <T>(path: string, form: FormData) => upload<T>(path, form),
+  download: (path: string) => downloadBlob(path),
   refresh: refreshAccessToken,
 };

@@ -349,6 +349,7 @@ export interface CategoryTable {
 
 export type ProductType = 'NEW' | 'BRANDED' | 'CHARGER' | 'STORAGE' | 'OTHER';
 export type ProductPlacement = 'INT' | 'EXT';
+export type RawPartType = 'CELL' | 'COMPLETE_SET' | 'OTHER';
 
 /**
  * The master catalog row — one per model, company-wide. Branch-specific
@@ -453,6 +454,15 @@ export interface RawProductTable {
   reorder: Numeric;
   brand_id: number | null;
   cat_id: number | null;
+  /** CELL | COMPLETE_SET | OTHER — three shapes sharing one table (SPECS §3.3). */
+  part_type: Defaulted<RawPartType>;
+  model: string | null;
+  placement: string | null;
+  cell_capacity_mah: number | null;
+  /** Null for anything that is not a CELL — hence nullable unlike the other numerics. */
+  cell_voltage: ColumnType<string | null, string | number | null, string | number | null>;
+  cell_size: string | null;
+  cell_brand: string | null;
   is_active: boolean;
   created_at: CreatedAt;
   updated_at: CreatedAt;

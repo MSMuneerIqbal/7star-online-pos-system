@@ -13,7 +13,7 @@ import type { Executor } from './db/index.js';
 import { db } from './db/index.js';
 import type { Principal } from './rbac.js';
 
-export type AuditAction = 'New' | 'Edit' | 'Delete' | 'Approve' | 'Print' | 'Login' | 'Logout';
+export type AuditAction = 'New' | 'Edit' | 'Delete' | 'Approve' | 'Print' | 'Login' | 'Logout' | 'Import';
 
 export interface AuditEntry {
   form: string;
