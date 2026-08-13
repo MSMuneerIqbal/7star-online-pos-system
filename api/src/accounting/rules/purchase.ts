@@ -16,6 +16,8 @@ export interface PurchaseInput {
   invId: number;
   date: string;
   branchId: number;
+  /** RAW debits raw inventory, FINISH debits finished inventory. */
+  kind: 'RAW' | 'FINISH';
   /** The supplier's payable account code. */
   supplierAccountId: number;
   supplierLabel: string;
@@ -33,13 +35,15 @@ export interface PurchaseInput {
 /**
  * Post a purchase.
  *
- *   Dr  inventory (raw)       sub_total + rent
+ *   Dr  inventory (raw or finished)   sub_total + rent
  *       Cr  supplier payable              net_total
  *       Cr  discount                      discount   (if any)
  */
 export function postPurchase(input: PurchaseInput): Journal[] {
   const stockValue = add(input.subTotal, input.rent);
   assertPurchaseTotals(input, stockValue);
+
+  const inventoryAccount = input.kind === 'FINISH' ? ACC.INVENTORY_FINISH : ACC.INVENTORY_RAW;
 
   const ref = `Purchase Invoice ${input.invId}`;
 
@@ -50,7 +54,7 @@ export function postPurchase(input: PurchaseInput): Journal[] {
       invId: input.invId,
       branchId: input.branchId,
       legs: [
-        debit(ACC.INVENTORY_RAW, stockValue, `Stock received – ${ref}`),
+        debit(inventoryAccount, stockValue, `Stock received – ${ref}`),
         credit(
           input.supplierAccountId,
           input.netTotal,

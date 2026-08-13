@@ -37,6 +37,8 @@ export interface PurchaseInput {
   date: string;
   supId: number;
   branchId?: number | undefined;
+  /** RAW (raw_product) or FINISH (product — bought-in chargers etc.). */
+  kind?: 'RAW' | 'FINISH' | undefined;
   /** Invoice-level discount, on top of any per-line discounts. */
   discount: string;
   /** Inward freight. Capitalised into stock value, not expensed. */
@@ -76,17 +78,26 @@ export async function computeTotals(
 
   const ids = [...new Set(input.lines.map((l) => l.pid))];
 
-  const products = await executor
-    .selectFrom('raw_product')
-    .select(['id', 'name'])
-    .where('id', 'in', ids)
-    .execute();
+  const products =
+    input.kind === 'FINISH'
+      ? await executor
+          .selectFrom('product')
+          .select(['id', 'name'])
+          .where('id', 'in', ids)
+          .execute()
+      : await executor
+          .selectFrom('raw_product')
+          .select(['id', 'name'])
+          .where('id', 'in', ids)
+          .execute();
 
   const byId = new Map(products.map((p) => [p.id, p]));
   const missing = ids.filter((id) => !byId.has(id));
 
   if (missing.length > 0) {
-    throw badRequest(`Unknown raw item id(s): ${missing.join(', ')}`);
+    throw badRequest(
+      `Unknown ${input.kind === 'FINISH' ? 'product' : 'raw item'} id(s): ${missing.join(', ')}`,
+    );
   }
 
   const lines: ComputedLine[] = [];
@@ -234,6 +245,8 @@ export async function createPurchase(
   const branchId = resolveBranchId(principal, input.branchId);
   assertBranchAccess(principal, branchId);
 
+  const kind = input.kind ?? 'RAW';
+
   return withTransaction(async (tx) => {
     const totals = await computeTotals(input, tx);
     const supplier = await resolveSupplier(input.supId, tx);
@@ -245,6 +258,7 @@ export async function createPurchase(
       .values({
         date: input.date,
         doc_number: docNumber,
+        kind,
         sup_id: input.supId,
         branch_id: branchId,
         gross_total: totals.subTotal,
@@ -264,12 +278,25 @@ export async function createPurchase(
 
     await writeLines(tx, purchase.id, totals.lines);
 
+    // A bought-in finished good carries its purchase cost as company cost
+    // (PRINCIPLES §17.16) — one column, two sources (production / purchase).
+    if (kind === 'FINISH') {
+      for (const line of totals.lines) {
+        await tx
+          .updateTable('product')
+          .set({ price: line.price, updated_at: new Date() })
+          .where('id', '=', line.pid)
+          .execute();
+      }
+    }
+
     await postJournals(
       tx,
       postPurchase({
         invId: purchase.id,
         date: input.date,
         branchId,
+        kind,
         supplierAccountId: supplier.accountId,
         supplierLabel: supplier.label,
         subTotal: totals.subTotal,
@@ -302,7 +329,7 @@ export async function updatePurchase(
 ): Promise<{ id: number }> {
   const existing = await db
     .selectFrom('purchase')
-    .select(['id', 'branch_id'])
+    .select(['id', 'branch_id', 'kind'])
     .where('id', '=', purchaseId)
     .executeTakeFirst();
 
@@ -310,15 +337,17 @@ export async function updatePurchase(
   assertBranchAccess(principal, existing.branch_id);
 
   const branchId = resolveBranchId(principal, input.branchId ?? existing.branch_id);
+  const kind = input.kind ?? (existing.kind as 'RAW' | 'FINISH') ?? 'RAW';
 
   return withTransaction(async (tx) => {
-    const totals = await computeTotals(input, tx);
+    const totals = await computeTotals({ ...input, kind }, tx);
     const supplier = await resolveSupplier(input.supId, tx);
 
     await tx
       .updateTable('purchase')
       .set({
         date: input.date,
+        kind,
         sup_id: input.supId,
         branch_id: branchId,
         gross_total: totals.subTotal,
@@ -338,10 +367,21 @@ export async function updatePurchase(
     await tx.deleteFrom('purchase_detail').where('purchase_id', '=', purchaseId).execute();
     await writeLines(tx, purchaseId, totals.lines);
 
+    if (kind === 'FINISH') {
+      for (const line of totals.lines) {
+        await tx
+          .updateTable('product')
+          .set({ price: line.price, updated_at: new Date() })
+          .where('id', '=', line.pid)
+          .execute();
+      }
+    }
+
     const journals = postPurchase({
       invId: purchaseId,
       date: input.date,
       branchId,
+      kind,
       supplierAccountId: supplier.accountId,
       supplierLabel: supplier.label,
       subTotal: totals.subTotal,

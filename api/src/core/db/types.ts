@@ -502,6 +502,8 @@ export interface PurchaseTable {
   date: ColumnType<string, string, string>;
   /** Branch-prefixed document number, e.g. `MUL-PI-1`. */
   doc_number: string;
+  /** RAW (raw_product) or FINISH (product — bought-in chargers etc.). */
+  kind: Defaulted<'RAW' | 'FINISH'>;
   sup_id: number;
   branch_id: number;
   gross_total: Numeric;
@@ -776,45 +778,113 @@ export interface DoReceivedDetailTable {
 }
 
 // ---------------------------------------------------------------------------
-// Production (phase 8)
+// Production (phase 4) — issue to worker, output, damage, rework
 // ---------------------------------------------------------------------------
 
-export interface ProductionTable {
+export interface WorkerTable {
   id: Generated<number>;
-  date: ColumnType<string, string, string>;
-  /** Branch-prefixed document number, e.g. `MUL-PRD-1`. */
-  doc_number: string;
-  branch_id: number;
-  /** The finished product being made. */
-  pid: number;
-  qty: number;
-  note: string | null;
-  labor_cost: Numeric;
-  electric_cost: Numeric;
-  other_cost: Numeric;
-  /** Derived from the consumed raw materials at catalog cost. */
-  material_cost: Numeric;
-  extra: Numeric;
-  extra1: Numeric;
-  /** total_cost / qty — becomes the finished product's carrying value. */
-  per_unit: Numeric;
-  total_cost: Numeric;
-  gross_total: Numeric;
+  name: string;
+  phone: string | null;
+  is_active: Defaulted<boolean>;
   created_at: CreatedAt;
   updated_at: CreatedAt;
   created_by: Defaulted<number>;
   updated_by: Defaulted<number>;
 }
 
-export interface ProductionDetailTable {
+/** A cart of raw parts issued to a named worker (work in progress). */
+export interface ProductionIssueTable {
   id: Generated<number>;
-  inv_id: number;
-  /** Raw material consumed. */
+  doc_number: string;
+  date: ColumnType<string, string, string>;
+  worker_id: number;
+  branch_id: number;
+  note: string | null;
+  status: Defaulted<string>;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
+export interface ProductionIssueDetailTable {
+  id: Generated<number>;
+  issue_id: number;
+  /** Raw item id. */
   pid: number;
   pname: string | null;
-  price: Numeric;
   qty: Numeric;
+  price: Numeric;
   total: Numeric;
+  status: Defaulted<string>;
+}
+
+/** The READY batteries that came back from a worker. */
+export interface ProductionOutputTable {
+  id: Generated<number>;
+  date: ColumnType<string, string, string>;
+  issue_id: number | null;
+  worker_id: number;
+  product_id: number;
+  branch_id: number;
+  qty: Numeric;
+  per_unit: Numeric;
+  total_cost: Numeric;
+  /** NEW for what the warehouse makes, REPAIRED for a battery that came back. */
+  grade: Defaulted<string>;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
+export interface UsedStockTable {
+  id: Generated<number>;
+  issue_id: number | null;
+  output_id: number | null;
+  pid: number;
+  pname: string | null;
+  qty: Numeric;
+  price: Numeric;
+  total: Numeric;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+}
+
+export interface DamagedStockTable {
+  id: Generated<number>;
+  date: ColumnType<string, string, string>;
+  worker_id: number | null;
+  branch_id: number;
+  issue_id: number | null;
+  kind: Defaulted<string>;
+  /** Raw item id (when kind = PART). */
+  pid: number | null;
+  /** Finished product id (when kind = BATTERY). */
+  product_id: number | null;
+  pname: string | null;
+  qty: Numeric;
+  value: Numeric;
+  reason: string | null;
+  status: Defaulted<string>;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
+}
+
+export interface ReworkTable {
+  id: Generated<number>;
+  date: ColumnType<string, string, string>;
+  product_id: number;
+  worker_id: number;
+  qty: Numeric;
+  note: string | null;
+  status: Defaulted<string>;
+  created_at: CreatedAt;
+  updated_at: CreatedAt;
+  created_by: Defaulted<number>;
+  updated_by: Defaulted<number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -950,8 +1020,13 @@ export interface Database {
   do_request_detail: DoRequestDetailTable;
   do_received: DoReceivedTable;
   do_received_detail: DoReceivedDetailTable;
-  production: ProductionTable;
-  production_detail: ProductionDetailTable;
+  worker: WorkerTable;
+  production_issue: ProductionIssueTable;
+  production_issue_detail: ProductionIssueDetailTable;
+  production_output: ProductionOutputTable;
+  used_stock: UsedStockTable;
+  damaged_stock: DamagedStockTable;
+  rework: ReworkTable;
   lab_received: LabReceivedTable;
   lab_received_detail: LabReceivedDetailTable;
   lab: LabTable;

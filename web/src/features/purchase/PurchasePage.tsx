@@ -24,6 +24,7 @@ interface PurchaseRow {
 interface FormData {
   suppliers: { id: number; name: string | null; phone: string | null }[];
   products: GridProduct[];
+  finishedProducts: GridProduct[];
   branches: { id: number; name: string }[];
 }
 
@@ -132,6 +133,7 @@ function PurchaseComposer({ onDone }: { onDone: () => void }) {
   const [date, setDate] = useState(today());
   const [supId, setSupId] = useState<number | null>(null);
   const [notes, setNotes] = useState('');
+  const [kind, setKind] = useState<'RAW' | 'FINISH'>('RAW');
 
   // A super admin signs in against branch 0 ("All Branches"), which is a filter
   // rather than a location — so they must pick a real branch to record against.
@@ -165,6 +167,7 @@ function PurchaseComposer({ onDone }: { onDone: () => void }) {
       api.post<{ id: number }>('/purchases', {
         date,
         supId,
+        kind,
         ...(branchId !== null ? { branchId } : {}),
         discount: grid.invoiceDiscount,
         rent: grid.service,
@@ -277,11 +280,29 @@ function PurchaseComposer({ onDone }: { onDone: () => void }) {
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
+
+        <div>
+          <label htmlFor="kind" className="field-label">
+            Goods type
+          </label>
+          <select
+            id="kind"
+            className="field-input"
+            value={kind}
+            onChange={(e) => {
+              setKind(e.target.value as 'RAW' | 'FINISH');
+              grid.reset();
+            }}
+          >
+            <option value="RAW">Raw material</option>
+            <option value="FINISH">Finished goods</option>
+          </select>
+        </div>
       </div>
 
       <InvoiceGrid
         lines={grid.totals.lines}
-        products={formData.data?.products ?? []}
+        products={kind === 'FINISH' ? (formData.data?.finishedProducts ?? []) : (formData.data?.products ?? [])}
         onAdd={grid.addLine}
         onRemove={grid.removeLine}
         onChange={grid.updateLine}

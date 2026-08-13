@@ -30,6 +30,7 @@ const purchaseBody = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD'),
   supId: z.coerce.number().int().positive(),
   branchId: z.coerce.number().int().optional(),
+  kind: z.enum(['RAW', 'FINISH']).default('RAW'),
   discount: decimalString('Discount').default('0'),
   rent: decimalString('Freight').default('0'),
   paid: decimalString('Paid').default('0'),
@@ -101,7 +102,7 @@ export default async function purchaseRoutes(app: FastifyInstance): Promise<void
       let branches = db.selectFrom('branch').select(['id', 'name']).where('id', '>', 0);
       if (!isSuper) branches = branches.where('id', '=', branchId);
 
-      const [supplierRows, productRows, branchRows] = await Promise.all([
+      const [supplierRows, productRows, finishedRows, branchRows] = await Promise.all([
         suppliers.orderBy('name').execute(),
         // Purchases consume raw materials, not finished goods.
         db
@@ -110,10 +111,22 @@ export default async function purchaseRoutes(app: FastifyInstance): Promise<void
           .where('is_active', '=', true)
           .orderBy('name')
           .execute(),
+        // Finished-goods purchases (chargers, adapters) — bought in, not made.
+        db
+          .selectFrom('product')
+          .select(['id', 'name', 'price as sellingPrice'])
+          .where('is_active', '=', true)
+          .orderBy('name')
+          .execute(),
         branches.orderBy('name').execute(),
       ]);
 
-      return { suppliers: supplierRows, products: productRows, branches: branchRows };
+      return {
+        suppliers: supplierRows,
+        products: productRows,
+        finishedProducts: finishedRows,
+        branches: branchRows,
+      };
     },
   });
 

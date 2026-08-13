@@ -234,6 +234,7 @@ describe('purchase posting', () => {
     invId: 900,
     date: '2026-01-15',
     branchId: 1,
+    kind: 'RAW' as const,
     supplierAccountId: 2010105,
     supplierLabel: 'Zenith Batteries',
     subTotal: '5000.00',
@@ -251,6 +252,12 @@ describe('purchase posting', () => {
   it('capitalises freight into stock value', () => {
     const [j] = postPurchase(purchase);
     expect(j!.legs.find((l) => l.accountId === ACC.INVENTORY_RAW)?.dr).toBe('5250.00');
+  });
+
+  it('debits finished inventory for a finished-goods purchase', () => {
+    const [j] = postPurchase({ ...purchase, kind: 'FINISH' });
+    expect(j!.legs.find((l) => l.accountId === ACC.INVENTORY_FINISH)?.dr).toBe('5250.00');
+    expect(j!.legs.find((l) => l.accountId === ACC.INVENTORY_RAW)).toBeUndefined();
   });
 
   it('rejects totals that do not reconcile', () => {

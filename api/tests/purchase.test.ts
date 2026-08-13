@@ -220,6 +220,7 @@ describe('purchase posting', () => {
           invId: purchase.id,
           date: '2026-03-05',
           branchId: BRANCH,
+          kind: 'RAW',
           supplierAccountId: SUPPLIER_ACC,
           supplierLabel: 'Zenith Metals',
           subTotal: t.subTotal,
