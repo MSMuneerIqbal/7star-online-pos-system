@@ -55,6 +55,8 @@ export const NAV: readonly NavSection[] = [
       { label: 'Customer', path: '/customers', formId: 7, status: 'ported' },
       { label: 'Vendor', path: '/suppliers', formId: 8, status: 'ported' },
       { label: 'Employee', path: '/employees', formId: 9, status: 'ported' },
+      // Gated on Raw Item view, which is what the import endpoints check.
+      { label: 'Import Raw Items', path: '/import/raw-products', action: [5, 2041], status: 'ported' },
     ],
   },
 
@@ -116,6 +118,8 @@ export const NAV: readonly NavSection[] = [
         ],
       },
       { label: 'Remittance', path: '/remittances', action: [55, 5111], status: 'ported' },
+      { label: 'Warranty', path: '/warranty', action: [57, 5121], status: 'ported' },
+      { label: 'E-Store', path: '/estore', action: [58, 5131], status: 'ported' },
     ],
   },
 
@@ -124,7 +128,7 @@ export const NAV: readonly NavSection[] = [
     title: 'Production',
     items: [
       { label: 'Production', path: '/production', action: [47, 10011], status: 'ported' },
-      { label: 'Stock Adjustment', path: '/adjustments', action: [58, 5131], status: 'ported' },
+      { label: 'Stock Adjustment', path: '/adjustments', action: [59, 10021], status: 'ported' },
     ],
   },
 
@@ -212,7 +216,7 @@ export const NAV: readonly NavSection[] = [
           { label: 'Balance Sheet', path: '/financials/balance-sheet', action: [30, 7081], status: 'ported' },
         ],
       },
-      { label: 'Opening Balances', path: '/opening', action: [25, 7031], status: 'ported' },
+      { label: 'Opening Balances', path: '/opening', action: [60, 7091], status: 'ported' },
     ],
   },
 

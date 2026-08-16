@@ -124,10 +124,5 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(notificationRoutes, { prefix: '/api/v1/notifications' });
   await app.register(adjustmentRoutes, { prefix: '/api/v1/adjustments' });
 
-  // Remaining feature modules land here as phases 4-10 land:
-  //   await app.register(brandRoutes, { prefix: '/api/v1/brands' });
-  //   await app.register(saleRoutes,  { prefix: '/api/v1/sales' });
-  //   ...
-
   return app;
 }

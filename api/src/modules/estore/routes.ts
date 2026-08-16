@@ -13,6 +13,38 @@ const idParam = z.object({ id: z.coerce.number().int().positive() });
 const decimal = z.union([z.string(), z.number()]).transform(String);
 
 export default async function estoreRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * Pickers for the shipment form. The E-Store manager is branch-blind for
+   * reads — it has to see stock across branches to route an order to a near one
+   * (PRINCIPLES §11) — so the branch list is never scoped here.
+   */
+  app.get('/form-data', {
+    preHandler: app.requireAction(PERM.formId, PERM.view),
+    handler: async (req) => {
+      const [products, branches] = await Promise.all([
+        db
+          .selectFrom('product')
+          .select(['id', 'name'])
+          .where('is_active', '=', true)
+          .orderBy('name')
+          .execute(),
+        db
+          .selectFrom('branch')
+          .select(['id', 'name', 'type'])
+          .where('id', '>', 0)
+          .where('is_active', '=', true)
+          .orderBy('name')
+          .execute(),
+      ]);
+
+      return {
+        products,
+        branches,
+        defaultBranchId: req.principal.isSuperAdmin ? null : req.principal.branchId,
+      };
+    },
+  });
+
   app.get('/', {
     preHandler: app.requireAction(PERM.formId, PERM.view),
     handler: async (req) => {

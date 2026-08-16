@@ -3,6 +3,7 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { ApiError } from '@/lib/api';
+import { Masthead } from '@/components/brand/Masthead';
 
 export function LoginPage() {
   const { user, login, loading } = useAuth();
@@ -42,11 +43,9 @@ export function LoginPage() {
   return (
     <div className="grid min-h-screen place-items-center bg-slate-100 p-4">
       <div className="w-full max-w-sm">
-        <div className="mb-6 flex flex-col items-center gap-2">
-          <div className="grid size-11 place-items-center rounded-xl bg-brand-600 text-sm font-bold text-white">
-            7S
-          </div>
-          <h1 className="text-lg font-semibold text-slate-900">7 Star Battery POS</h1>
+        {/* DESIGN §2 names the login screen as one of the masthead's two homes. */}
+        <div className="mb-6 flex flex-col items-center gap-3">
+          <Masthead variant="login" />
           <p className="text-sm text-slate-500">Sign in to continue</p>
         </div>
 

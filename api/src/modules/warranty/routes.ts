@@ -14,6 +14,45 @@ const idParam = z.object({ id: z.coerce.number().int().positive() });
 const decimal = z.union([z.string(), z.number()]).transform(String);
 
 export default async function warrantyRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * Pickers for the claim and assessment forms: finished products for the units
+   * claimed, raw items for the parts a repair consumes, and the branch list so
+   * the warehouse can be named on a resolution.
+   */
+  app.get('/form-data', {
+    preHandler: app.requireAction(PERM.formId, PERM.view),
+    handler: async (req) => {
+      const [products, rawProducts, branches] = await Promise.all([
+        db
+          .selectFrom('product')
+          .select(['id', 'name'])
+          .where('is_active', '=', true)
+          .orderBy('name')
+          .execute(),
+        db
+          .selectFrom('raw_product')
+          .select(['id', 'name'])
+          .where('is_active', '=', true)
+          .orderBy('name')
+          .execute(),
+        db
+          .selectFrom('branch')
+          .select(['id', 'name', 'type'])
+          .where('id', '>', 0)
+          .where('is_active', '=', true)
+          .orderBy('name')
+          .execute(),
+      ]);
+
+      return {
+        products,
+        rawProducts,
+        branches,
+        defaultBranchId: req.principal.isSuperAdmin ? null : req.principal.branchId,
+      };
+    },
+  });
+
   app.get('/claims', {
     preHandler: app.requireAction(PERM.formId, PERM.view),
     handler: async (req) => {

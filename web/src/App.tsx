@@ -1,3 +1,4 @@
+import { Suspense, lazy } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
@@ -5,7 +6,6 @@ import { Loader2 } from 'lucide-react';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { AppShell } from '@/components/layout/AppShell';
 import { LoginPage } from '@/features/auth/LoginPage';
-import { DashboardPage } from '@/features/dashboard/DashboardPage';
 import { BranchPage } from '@/features/branch/BranchPage';
 import { SalePage } from '@/features/sale/SalePage';
 import { PurchasePage } from '@/features/purchase/PurchasePage';
@@ -16,7 +16,6 @@ import { BranchProductPage } from '@/features/branch-product/BranchProductPage';
 import { VoucherPage } from '@/features/voucher/VoucherPage';
 import { LedgerPage } from '@/features/ledger/LedgerPage';
 import { TrialBalancePage } from '@/features/ledger/TrialBalancePage';
-import { DemandOrderPage } from '@/features/demand-order/DemandOrderPage';
 import { RemittancePage } from '@/features/remittance/RemittancePage';
 import { CustomerStatementPage } from '@/features/customer/CustomerStatementPage';
 import { ExpensePage } from '@/features/expense/ExpensePage';
@@ -29,9 +28,6 @@ import {
 } from '@/features/reports/FinancialReports';
 import { ItemLedgerPage, StockReportPage } from '@/features/reports/StockReports';
 import { PurchaseReportPage, SaleReportPage } from '@/features/reports/TradeReports';
-import { ProductionPage } from '@/features/production/ProductionPage';
-import { LabPage } from '@/features/lab/LabPage';
-import { ChartOfAccountsPage } from '@/features/accounts/ChartOfAccountsPage';
 import {
   RegistrationPage,
   BRAND,
@@ -53,6 +49,52 @@ import {
 import { NotBuiltPage } from '@/components/NotBuiltPage';
 import { NAV } from '@/lib/nav';
 
+/**
+ * The heavy screens load on demand.
+ *
+ * Everything used to sit in one ~1 MB chunk that had to download before the
+ * login form was interactive. These are shop counters on Pakistani broadband
+ * with a customer waiting (DESIGN §1), and a branch salesman never opens the
+ * dashboard — yet Recharts, which only the dashboard needs, was in their first
+ * paint. Splitting at the route is where the win is.
+ */
+const DashboardPage = lazy(() =>
+  import('@/features/dashboard/DashboardPage').then((m) => ({
+    default: m.DashboardPage,
+  })),
+);
+const DemandOrderPage = lazy(() =>
+  import('@/features/demand-order/DemandOrderPage').then((m) => ({
+    default: m.DemandOrderPage,
+  })),
+);
+const ProductionPage = lazy(() =>
+  import('@/features/production/ProductionPage').then((m) => ({
+    default: m.ProductionPage,
+  })),
+);
+const LabPage = lazy(() => import('@/features/lab/LabPage').then((m) => ({ default: m.LabPage })));
+const ChartOfAccountsPage = lazy(() =>
+  import('@/features/accounts/ChartOfAccountsPage').then((m) => ({
+    default: m.ChartOfAccountsPage,
+  })),
+);
+const WarrantyPage = lazy(() =>
+  import('@/features/warranty/WarrantyPage').then((m) => ({
+    default: m.WarrantyPage,
+  })),
+);
+const EStorePage = lazy(() =>
+  import('@/features/estore/EStorePage').then((m) => ({
+    default: m.EStorePage,
+  })),
+);
+const ImportPage = lazy(() =>
+  import('@/features/import/ImportPage').then((m) => ({
+    default: m.ImportPage,
+  })),
+);
+
 /** Routes with a real implementation. Everything else gets a placeholder. */
 const IMPLEMENTED: Record<string, React.ComponentType> = {
   '/branches': BranchPage,
@@ -67,6 +109,7 @@ const IMPLEMENTED: Record<string, React.ComponentType> = {
   '/employees': () => <RegistrationPage config={EMPLOYEE} />,
 
   '/branch-products': BranchProductPage,
+  '/import/raw-products': ImportPage,
 
   '/sales': SalePage,
   '/purchases': PurchasePage,
@@ -100,6 +143,8 @@ const IMPLEMENTED: Record<string, React.ComponentType> = {
   '/demand-orders/finish/receiving': () => <DemandOrderPage kind="finish" initialTab="received" />,
   '/demand-orders/finish/received': () => <DemandOrderPage kind="finish" initialTab="received" />,
   '/remittances': RemittancePage,
+  '/warranty': WarrantyPage,
+  '/estore': EStorePage,
   '/customers/statement': CustomerStatementPage,
   '/expenses': ExpensePage,
   '/opening': OpeningBalancesPage,
@@ -175,7 +220,11 @@ function placeholderRoutes() {
       const leaves = item.children ?? [item];
       for (const leaf of leaves) {
         if (leaf.path === '/') continue;
-        routes.push({ path: leaf.path, label: leaf.label, status: leaf.status });
+        routes.push({
+          path: leaf.path,
+          label: leaf.label,
+          status: leaf.status,
+        });
       }
     }
   }
@@ -205,34 +254,48 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
+          {/*
+            One boundary for every lazily-loaded screen. DESIGN §4 asks for the
+            previous render held at 60% rather than a spinner on refetch, but a
+            *route* change has no previous render to hold — a brief centred
+            spinner is the honest thing while the chunk arrives.
+          */}
+          <Suspense
+            fallback={
+              <div className="grid min-h-screen place-items-center">
+                <Loader2 className="size-5 animate-spin text-slate-400" />
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
 
-            {/*
+              {/*
               Print routes sit OUTSIDE the app shell: no sidebar or header, so
               the page prints as the document alone. Still behind auth.
             */}
-            <Route
-              path="/print/:kind/:id"
-              element={
-                <RequireAuth>
-                  <PrintDocumentPage />
-                </RequireAuth>
-              }
-            />
+              <Route
+                path="/print/:kind/:id"
+                element={
+                  <RequireAuth>
+                    <PrintDocumentPage />
+                  </RequireAuth>
+                }
+              />
 
-            <Route
-              element={
-                <RequireAuth>
-                  <AppShell />
-                </RequireAuth>
-              }
-            >
-              <Route index element={<DashboardPage />} />
-              {placeholderRoutes()}
-              <Route path="*" element={<NotBuiltPage title="Page not found" status="new" />} />
-            </Route>
-          </Routes>
+              <Route
+                element={
+                  <RequireAuth>
+                    <AppShell />
+                  </RequireAuth>
+                }
+              >
+                <Route index element={<DashboardPage />} />
+                {placeholderRoutes()}
+                <Route path="*" element={<NotBuiltPage title="Page not found" status="new" />} />
+              </Route>
+            </Routes>
+          </Suspense>
 
           <Toaster position="top-right" richColors closeButton />
         </AuthProvider>
