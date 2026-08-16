@@ -94,6 +94,13 @@ branch. Every query is scoped to that branch unless the role is branch-blind.
 | Login history | Super admin | Who signed in, when, from where |
 | Activity log | Super admin | Every create, edit and delete, with before and after |
 
+**One screen, one grant.** Every screen owns its own `(form, action)` ids and
+shares them with nothing. Two screens behind one grant means ticking a box opens
+a door nobody meant to open — and it is not hypothetical: Stock Adjustment once
+shared E-Store's, and Opening Balances shared Account Registration's, so anyone
+allowed to add a ledger account could also set the company's whole starting
+position. Both now stand alone.
+
 ---
 
 ## 3. Registration and the master catalog `RESHAPE`
@@ -758,6 +765,16 @@ validation that skips bad rows and reports them, and quantities **added** to
 existing stock rather than replacing it. Available for products, raw items,
 customers and opening stock.
 
+**Preview is the point, so it is a screen, not an endpoint.** Registration →
+*Import Raw Items* uploads the spreadsheet, shows every row classified with its
+row number, and writes nothing until the operator presses Import. Rows that fail
+validation are listed with the reason and skipped; the rest still import. The
+row classes reuse the reserved status colours — NEW reads *good*, UPDATE reads
+*warning*, ERROR reads *critical* — rather than inventing a fourth palette.
+
+Raw items are the first consumer. Products, customers and opening stock point at
+the same engine rather than growing three more importers.
+
 ### Printing
 
 A5 PDF invoices with logo, branch details and a bordered table; plus statements,
@@ -772,7 +789,11 @@ Every create, edit and delete is logged with user, timestamp, before and after.
 
 ## 19. Build order
 
-Each phase leaves the system working.
+Each phase leaves the system working. **All thirteen have landed** — the table
+below is now history rather than a plan. What a phase is *not* finished by is
+green tests: Warranty, E-Store and Excel import each passed their service tests
+while no user could reach them, because no screen existed. A phase is finished
+when someone can drive it in the browser (PLAN's definition of done).
 
 | # | Phase | Why here |
 |---|---|---|

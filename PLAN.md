@@ -25,27 +25,71 @@ These hold for every phase. They are what keep a half-finished system usable.
    The existing series ends at `1700000000009`; new work continues from
    `1700000000010`. Never hand-edit the database. Every migration carries a
    working `-- Down Migration` section — the ones already written all do.
-3. **No test is deleted without a stated reason.** 142 tests pass today. Some of
-   them encode the old business and will fail deliberately; when one does, say in
-   the phase why it changed. What is forbidden is deleting a test to go green.
-   Every new posting rule arrives with a test that proves its voucher balances.
+3. **No test is deleted without a stated reason.** The suite began at 142 and
+   stands at 178. Some of the originals encoded the old business and failed
+   deliberately; when one does, say in the phase why it changed. What is
+   forbidden is deleting a test to go green. Every new posting rule arrives with
+   a test that proves its voucher balances.
 4. **Ledger integrity is checked after every phase that posts.**
-   `npx tsx scripts/check-ledger.ts` must come back clean.
+   `npx tsx scripts/check-ledger.ts` must come back clean. It asks two
+   questions, not one: does every voucher balance, **and does every posted
+   document have a voucher?** The second exists because "no unbalanced vouchers"
+   is vacuously true of an empty ledger — a guard that cannot tell *clean* from
+   *empty* is not a guard.
+4a. **Tests roll back. They never commit.** Every write service takes an
+   optional trailing `tx` (`inTransaction` in `core/db`) so it can be driven
+   from `tests/helpers/rollback.ts`. A service that calls `withTransaction`
+   directly cannot be wrapped, and a test that cannot roll back will commit to
+   the shared database instead.
+   *This is not theoretical.* Services written without that seam had tests that
+   committed and unwound themselves in a `finally`, and one of those cleanups ran
+   `DELETE FROM transactions WHERE inv_id = <id>` with no `vtype`.
+   **`(vtype, inv_id)` is the key** — `inv_id` alone is only unique within a
+   voucher type — so once a test document's id reached a live sale's id, the
+   delete took that sale's ledger legs with it. A real sale was left with no
+   accounting behind it. The only sanctioned exception is a test that needs two
+   transactions to see each other (concurrency); it must scope every cleanup by
+   `vtype` and say why.
+4b. **An assertion must hold for any database state.** A test that passes only
+   because the shared database happens to contain something is a coin flip, not
+   a test. `reports.test.ts` asserted `totalAssets > 0` and passed for months on
+   ambient data; the moment the ledger was emptied it failed, having never once
+   exercised the sign normalisation it claimed to check. It now seeds its own
+   voucher inside a rollback and reads it back through an `executor` option.
+   Either assert a *relationship* that holds on empty books
+   (`assets = liabilities + equity`), or seed the figures you assert on.
 5. **One database, no tenants.** Branch isolation is a `branch_id` column,
    enforced in the query layer today and in the database itself once Phase 13
    lands. Never a schema or database per branch.
 6. **Nothing is deleted that has history.** Deactivate instead.
 7. **Business rules live in `api/src/accounting/rules/`**, separate from
    persistence, so they can be tested without a database.
+7a. **A module is `routes.ts` + `service.ts`.** Routes own Zod schemas and HTTP;
+   the service owns the work. Three modules still break this and hold everything
+   in `routes.ts` — `catalog` (818 lines, and it carries the master-catalog
+   identity rules), `admin` (721) and `parties` (616). `hold-sale` is a genuine
+   exception and says why in its header: it carries no money, so there is nothing
+   to derive and no journal to balance. **Extracting those three is the first
+   refactor to do now that features have stopped landing** — deliberately not
+   done mid-flight, because an 800-line move while other work is in progress
+   trades a real risk for a tidiness win. The same applies on the web side to
+   `ProductionPage` (1078 lines) and `DemandOrderPage` (939).
 8. **A phase that adds a document type ships that document's print template and
    its Excel export in the same phase.** A document nobody can hand to a customer
    is not finished (SPECS §18, DESIGN §8).
-9. **Every new screen gets a permission id before it gets a route.** The tree
-   today is 11 heads, 51 forms and 191 actions, reconstructed from the dead
-   ASP.NET menu and — as the migration's own header says — **not renumberable**.
-   New work therefore claims **head 12 upward**, keeping the existing scheme
+9. **Every new screen gets its OWN permission id before it gets a route.** The
+   tree was reconstructed from the dead ASP.NET menu and is **not renumberable**.
+   New work claims **head 12 upward**, keeping the scheme
    `form_code = head_code × 100 + sequence` and `action = form_code × 10 + n`,
    seeded in the same migration as the feature it belongs to.
+   **Never reuse another screen's id**, and never let `ON CONFLICT DO NOTHING`
+   hide the fact that you have: it silently leaves the *other* screen's row in
+   place while your routes authorise against it. That happened twice — Stock
+   Adjustment ended up sharing E-Store's grant, and Opening Balances shared
+   Account Registration's, so anyone who could add a ledger account could also
+   set the company's entire starting position. Both are fixed; the rule is here
+   so it does not happen a third time. Check `SELECT form_code FROM form` before
+   claiming one.
 10. **The repository stays production-shaped throughout.** One folder per
     feature, no stray scripts at the root, no commented-out code left behind, no
     dead module kept "just in case", nothing generated committed. A one-off
@@ -60,17 +104,24 @@ These hold for every phase. They are what keep a half-finished system usable.
 - [ ] `check-ledger.ts` clean, if the phase posts anything
 - [ ] `verify-permissions.ts` clean, if the phase added a screen
 - [ ] Every new document type prints, and every new list exports
-- [ ] The screens work in the browser, driven by hand once
+- [ ] **Every new API endpoint is reachable from a screen** — a nav entry, a
+      route, and the feature driven by hand once in the browser. Green service
+      tests cannot see a missing screen: Warranty, E-Store and Excel import were
+      each marked complete on passing tests while no user could reach them
 - [ ] Nothing left behind — no dead code, no stray files, no TODOs standing in
       for work the phase claimed to finish
 - [ ] SPECS.md updated if reality diverged from the spec
 
 ---
 
-## 2. Where we are starting from
+## 2. Where we started, and where we are
 
-From the audit in PRINCIPLES §16. This is not a greenfield build and it is not a
-port either — it is a **reshaping**.
+> **All thirteen phases have landed.** §3 below is kept as the record of what
+> each phase was for and how it was judged finished — read it as history, not as
+> a queue. What remains is in §6, and none of it is feature work.
+
+From the audit in PRINCIPLES §16. This was not a greenfield build and not a
+port either — it was a **reshaping**.
 
 **Solid, and staying:** the posting engine and its balanced-voucher guarantee,
 money as exact decimals, auth and RBAC, the chart of accounts with atomic code
@@ -86,9 +137,18 @@ rather than dropped (Phase 0).
 **Wrong, and being replaced:** the business model those parts sit under. It came
 from a different company's ASP.NET system, not from 7 Star.
 
-**The critical path runs through Phase 1.** Production, transfers, selling,
-warranty, the E-Store and every stock report all sit on product identity. Until
-`product` splits, everything else is building on sand.
+**The critical path ran through Phase 1.** Production, transfers, selling,
+warranty, the E-Store and every stock report all sit on product identity, so
+nothing real could be built until `product` split. It did, and they were.
+
+**What the build got right, and what it taught.** The accounting core held
+throughout — every voucher balances, posting rules stayed isolated, money never
+became a float. The three things it got wrong are now ground rules rather than
+prose, because each was found the expensive way: a feature can pass every test
+and still be unreachable (rule: definition of done), a service without a
+transaction seam forces its test to commit against the live database (rule 4a),
+and a permission id claimed twice silently hands one screen another's grant
+(rule 9).
 
 ---
 
@@ -668,28 +728,54 @@ exists.
 | **Print templates drifting apart** | Thirteen layouts already exist; new document types tempt new one-off templates | One `DocumentHeader` and one A5 shell in Phase 2, and ground rule 8 |
 | **RLS that silently does nothing** | Policies do not restrict the table owner, and there is no per-request connection | Deferred, and written up above. If it is scheduled, `FORCE ROW LEVEL SECURITY` and a non-owning role, or the test proves nothing |
 | **The old 142 tests encode the old business** | Some assert behaviour we are deliberately changing | Read each failure. A failing test is sometimes the correct outcome — update it deliberately, never delete it to go green |
-| **Neon is shared and live** | Test data committed to it pollutes real reporting | Tests roll back. Never run `reset-data.ts` against it casually |
+| **Neon is shared and live** | Test data committed to it pollutes real reporting — and it did: a test cleanup deleted a live sale's ledger legs | Ground rule 4a. Every write service takes an optional `tx`; tests roll back. Set `TEST_DATABASE_URL` to a throwaway database as well — belt and braces. Never run `reset-data.ts` against it casually |
+| **A green test is not a delivered feature** | Service tests pass without a screen; three features shipped "complete" and unreachable | The definition of done requires a nav entry, a route, and one hand-driven pass in the browser |
+| **Permission ids get reused** | `ON CONFLICT DO NOTHING` hides the collision and the other screen's row wins | Ground rule 9. Check `SELECT form_code FROM form` before claiming one |
 
 ---
 
 ## 6. What blocks go-live
 
-Questions 1 to 4 are yours. Item 5 is build work — Phase 13 — and is listed here
-because nothing can trade until it is done.
+All thirteen phases have landed. What is left is not development.
+
+**Yours to answer:**
 
 1. **FCC** — still open? Real name? It is in the old apps, not on the website.
 2. **Gujranwala** — on the website, absent from the old apps. Confirm it is live.
-3. **The dues question** — owes-on-holding or owes-on-selling. **Changes what
-   Phase 5 builds**, so it is the most urgent of the four.
-4. **The warranty question** — is the customer served instantly or does he wait,
-   and what happens when the branch has none of that model?
-5. **Opening balances** — cash, bank, stock on hand, what credit customers owe,
-   what you owe suppliers. The screens are Phase 13; the **figures** are yours,
-   and they are what the phase cannot start without.
-6. **Dashboard priorities** — which three panels go at the top.
+3. **Opening balances** — cash, bank, stock on hand, what credit customers owe,
+   what you owe suppliers. The screen is built; the **figures** are yours, and
+   nothing should trade until they are in.
+4. **Dashboard priorities** — which three panels go at the top.
 
-Items 1, 2 and 6 affect setup only. Item 3 changes what gets built in Phase 5,
-item 4 in Phase 9, and item 5 is a phase of its own.
+**Settled by what was built** — recorded here because the plan once listed them
+as open, and the code has since answered them:
+
+5. **The dues question** was built the first way: a branch owes for stock it
+   *holds*, from confirmed receipt. Say so if that is wrong; it is a real change
+   to dispatch, receipt and the dues report, not a setting.
+6. **The warranty question** was built as *the customer never waits* — the branch
+   replaces from its own shelf on the day and claims after.
+
+**Two housekeeping items before real data arrives:**
+
+7. ~~Set `TEST_DATABASE_URL`~~ — **done.** The suite was running against the Neon
+   branch literally named `production`. There is now a sibling branch, `test`,
+   forked from it with data and schema (the tests read seeded reference data —
+   the chart of accounts, the WAREHOUSE branch, expense categories — so a
+   schema-only branch would fail), auto-delete **Never**, and `.env` points
+   `TEST_DATABASE_URL` at it. `.env.example` documents the setup for the next
+   person. Branches are copy-on-write: `production` was not touched, and the
+   project sits at 2 of 10 branches on the free plan.
+
+   Related, and fixed in the same pass: the pool now sets `keepAlive`. Neon is
+   serverless and reaps connections it thinks are idle; without keepalives the
+   client only finds out on its next query, which is what failed three files on
+   `Connection terminated unexpectedly` partway through a five-minute run. Those
+   were never test failures, but they are indistinguishable from one at a glance.
+8. **Sale 17 has no ledger legs** — a smoke-test document orphaned when an older
+   test's cleanup deleted its voucher. `check-ledger.ts` reports it. Delete the
+   document or re-post it; either is fine, but the guard stays red until one of
+   them happens.
 
 ---
 
