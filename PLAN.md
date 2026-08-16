@@ -72,16 +72,25 @@ These hold for every phase. They are what keep a half-finished system usable.
 6. **Nothing is deleted that has history.** Deactivate instead.
 7. **Business rules live in `api/src/accounting/rules/`**, separate from
    persistence, so they can be tested without a database.
-7a. **A module is `routes.ts` + `service.ts`.** Routes own Zod schemas and HTTP;
-   the service owns the work. Three modules still break this and hold everything
-   in `routes.ts` — `catalog` (818 lines, and it carries the master-catalog
-   identity rules), `admin` (721) and `parties` (616). `hold-sale` is a genuine
-   exception and says why in its header: it carries no money, so there is nothing
-   to derive and no journal to balance. **Extracting those three is the first
-   refactor to do now that features have stopped landing** — deliberately not
-   done mid-flight, because an 800-line move while other work is in progress
-   trades a real risk for a tidiness win. The same applies on the web side to
-   `ProductionPage` (1078 lines) and `DemandOrderPage` (939).
+7a. **A module is `routes.ts` + `service.ts`.** Routes own Zod schemas, the
+   permission gate and the status code; the service owns the work, takes a
+   `Principal` rather than a request, and is testable without HTTP.
+
+   `catalog`, `admin` and `parties` held everything in `routes.ts` and have been
+   split (818 → 173, 721 → 192, 616 → 151). Worth doing beyond tidiness: the
+   master-catalog identity rule, the atomic minting of a party's ledger account,
+   and the two permission-subset rules are each business logic that was only
+   reachable through an HTTP verb.
+
+   The remaining route-only modules are small and genuinely CRUD — `branch`
+   (305), `hold-sale` (347), `customer` (199), `dashboard` (140),
+   `branch-product` (132). `hold-sale` states its exemption in its header: it
+   carries no money, so there is nothing to derive and no journal to balance.
+   Split any of them when they grow logic, not before.
+
+   Still outstanding on the web side: `ProductionPage` (1078 lines) and
+   `DemandOrderPage` (939) each hold several screens' worth of dialogs in one
+   file.
 8. **A phase that adds a document type ships that document's print template and
    its Excel export in the same phase.** A document nobody can hand to a customer
    is not finished (SPECS §18, DESIGN §8).
