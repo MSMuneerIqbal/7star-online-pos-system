@@ -25,6 +25,14 @@ These hold for every phase. They are what keep a half-finished system usable.
    The existing series ends at `1700000000009`; new work continues from
    `1700000000010`. Never hand-edit the database. Every migration carries a
    working `-- Down Migration` section — the ones already written all do.
+2a. **A migration must reach BOTH Neon branches.** `npm run migrate:up` uses
+   `DATABASE_URL`, which is `production`. The `test` branch needs the same
+   migration or the suite runs against a stale schema and fails for reasons that
+   have nothing to do with the code:
+
+   ```bash
+   DATABASE_URL="$TEST_DATABASE_URL" npm run migrate:up --prefix api
+   ```
 3. **No test is deleted without a stated reason.** The suite began at 142 and
    stands at 178. Some of the originals encoded the old business and failed
    deliberately; when one does, say in the phase why it changed. What is
