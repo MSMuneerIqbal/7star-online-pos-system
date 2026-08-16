@@ -5,10 +5,10 @@ import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { fmtMoney } from '@/lib/money';
-import { cn } from '@/lib/cn';
 import { DataTable, Pagination, type Column } from '@/components/ui/DataTable';
 import { Field, PageHeader } from '@/components/ui/Field';
 import { Modal } from '@/components/ui/Modal';
+import { StatusPill } from '@/components/ui/StatusPill';
 
 interface Paged<T> {
   rows: T[];
@@ -129,17 +129,8 @@ export function RemittancePage() {
     {
       key: 'status',
       header: 'Status',
-      width: '7rem',
-      cell: (r) => (
-        <span
-          className={cn(
-            'rounded-sm px-1.5 py-0.5 text-xs font-medium',
-            r.status === 'CONFIRMED' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800',
-          )}
-        >
-          {r.status}
-        </span>
-      ),
+      width: '8rem',
+      cell: (r) => <StatusPill status={r.status} />,
     },
   ];
 

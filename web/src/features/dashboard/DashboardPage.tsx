@@ -1,24 +1,12 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import { Boxes, Package, Receipt, Users } from 'lucide-react';
+import { Boxes, Package, Receipt, ShieldCheck, ShoppingCart, Users } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { fmtMoney } from '@/lib/money';
 import { PageHeader } from '@/components/ui/Field';
-import { CHART, axisProps, chartGrid, seqColor } from '@/components/ui/Chart';
+import { MagnitudeChart, RankedList, TrendChart } from '@/components/ui/Chart';
 
 interface DashboardData {
   hero: { month: string; previous: string };
@@ -41,13 +29,6 @@ interface DashboardData {
   };
   branches: Array<{ id: number; name: string | null }>;
 }
-
-const tooltipStyle = {
-  borderRadius: 6,
-  border: '1px solid #e2e8f0',
-  fontSize: 12,
-  boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-} as const;
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -72,9 +53,9 @@ export function DashboardPage() {
     { label: 'Dead stock', value: String(data?.figures.deadStock ?? 0), icon: Boxes, to: '/reports/finish/stock' },
     { label: 'Branch dues', value: fmtMoney(data?.figures.dues ?? '0'), icon: Users, to: '/remittances' },
     { label: 'Production', value: String(data?.figures.productionPieces ?? 0), icon: Package, to: '/production' },
-    { label: 'Warranty', value: String(data?.figures.warrantyUnits ?? 0), icon: Package, to: '/demand-orders/raw' },
+    { label: 'Warranty', value: String(data?.figures.warrantyUnits ?? 0), icon: ShieldCheck, to: '/warranty' },
     { label: 'Lab revenue', value: fmtMoney(data?.figures.labRevenue ?? '0'), icon: Receipt, to: '/lab/receiving' },
-    { label: 'E-Store', value: String(data?.figures.estoreShipments ?? 0), icon: Package, to: '/demand-orders/finish' },
+    { label: 'E-Store', value: String(data?.figures.estoreShipments ?? 0), icon: ShoppingCart, to: '/estore' },
   ];
 
   return (
@@ -106,7 +87,13 @@ export function DashboardPage() {
         <p className="text-xs font-medium tracking-wide text-slate-500 uppercase">Sales this month</p>
         <div className="flex items-end gap-3">
           <p className="text-hero font-semibold text-slate-900 tabular">{fmtMoney(data?.hero.month ?? '0')}</p>
-          <p className={delta >= 0 ? 'text-sm font-medium text-emerald-700' : 'text-sm font-medium text-red-600'}>
+          {/* Status ink, from the reserved tokens — never Tailwind's palette (DESIGN §6.2). */}
+          <p
+            className="text-sm font-medium"
+            style={{
+              color: delta >= 0 ? 'var(--color-status-good)' : 'var(--color-status-critical)',
+            }}
+          >
             {delta >= 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(1)}% vs last month
           </p>
         </div>
@@ -124,54 +111,33 @@ export function DashboardPage() {
         ))}
       </div>
 
+      {/* Charts are head-office only. A branch gets figures (PRINCIPLES §12). */}
       {isSuper && (
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          <div className="card p-4">
-            <h2 className="mb-2 text-sm font-semibold text-slate-900">Sales — 12 months</h2>
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={data?.charts.salesByMonth ?? []}>
-                <CartesianGrid {...chartGrid} />
-                <XAxis dataKey="month" {...axisProps} />
-                <YAxis {...axisProps} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Line type="monotone" dataKey="total" stroke={CHART.series[0]} strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          <TrendChart
+            title="Sales — 12 months"
+            rows={data?.charts.salesByMonth ?? []}
+            labelKey="month"
+            valueKey="total"
+            format={(v) => fmtMoney(String(v))}
+          />
 
-          <div className="card p-4">
-            <h2 className="mb-2 text-sm font-semibold text-slate-900">Sales by branch</h2>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={data?.charts.salesByBranch ?? []} layout="vertical">
-                <CartesianGrid {...chartGrid} />
-                <XAxis type="number" {...axisProps} />
-                <YAxis type="category" dataKey="name" width={120} {...axisProps} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Bar dataKey="total" radius={[0, 3, 3, 0]}>
-                  {(data?.charts.salesByBranch ?? []).map((_, i) => (
-                    <Cell key={i} fill={seqColor(i)} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          <MagnitudeChart
+            title="Sales by branch"
+            rows={data?.charts.salesByBranch ?? []}
+            labelKey="name"
+            valueKey="total"
+            format={(v) => fmtMoney(String(v))}
+          />
 
-          <div className="card p-4 lg:col-span-2">
-            <h2 className="mb-2 text-sm font-semibold text-slate-900">Best sellers</h2>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={data?.charts.bestSellers ?? []} layout="vertical">
-                <CartesianGrid {...chartGrid} />
-                <XAxis type="number" {...axisProps} />
-                <YAxis type="category" dataKey="name" width={180} {...axisProps} />
-                <Tooltip contentStyle={tooltipStyle} />
-                <Bar dataKey="qty" radius={[0, 3, 3, 0]}>
-                  {(data?.charts.bestSellers ?? []).map((_, i) => (
-                    <Cell key={i} fill={seqColor(i)} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {/* A ranked list is a table, not a chart — DESIGN §6.3. */}
+          <RankedList
+            title="Best sellers"
+            rows={data?.charts.bestSellers ?? []}
+            labelKey="name"
+            valueKey="qty"
+            className="lg:col-span-2"
+          />
         </div>
       )}
     </>

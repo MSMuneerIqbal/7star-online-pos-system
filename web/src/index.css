@@ -1,4 +1,9 @@
 @import 'tailwindcss';
+/* Inter carries every piece of interface and every number (DESIGN §2). Without
+   this import `--font-sans` names a font the browser does not have and the whole
+   app silently falls back to the system UI face, taking the tabular-figure
+   behaviour the table spec depends on with it. */
+@import '@fontsource-variable/inter';
 @import '@fontsource/jost/900.css';
 
 /**
@@ -9,7 +14,7 @@
  * smaller base text, compact rows, so a full invoice grid fits without scrolling.
  */
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
   /* Jost is for the masthead and printed headings only — it never touches data. */
   --font-display: 'Jost', sans-serif;
