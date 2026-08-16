@@ -1,6 +1,9 @@
 /**
  * Stock adjustment routes — the super-admin "increase / decrease" screen.
- * Form 58 / code 513, under head 10 (Production).
+ * Form 59 / code 1002, under head 10 (Production).
+ *
+ * It used to claim form 58 / code 513, which is E-Store's — one permission
+ * behind two unrelated screens. See migration 1700000000030.
  */
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -9,7 +12,7 @@ import { notFound } from '../../core/errors.js';
 import { formPermissions } from '../../core/crud.js';
 import * as service from './service.js';
 
-const PERM = formPermissions(58, 513);
+const PERM = formPermissions(59, 1002);
 
 const decimalString = z.union([z.string(), z.number()]).transform(String);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD');

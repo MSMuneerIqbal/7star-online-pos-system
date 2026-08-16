@@ -9,7 +9,10 @@ import { db } from '../../core/db/index.js';
 import { formPermissions } from '../../core/crud.js';
 import * as service from './service.js';
 
-const PERM = formPermissions(25, 703);
+// Form 60 / code 709. It used to share form 25 / 703 with Account Registration,
+// so creating a ledger account and setting the company's whole starting position
+// were one grant. See migration 1700000000031.
+const PERM = formPermissions(60, 709);
 const decimal = z.union([z.string(), z.number()]).transform(String);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
