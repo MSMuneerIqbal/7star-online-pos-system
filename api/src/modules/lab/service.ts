@@ -27,7 +27,7 @@
  * If the real workflow differs, the shape to change is here; the posting rules
  * are in accounting/rules/lab.ts.
  */
-import { db, withTransaction, type Tx } from '../../core/db/index.js';
+import { db, inTransaction, type Tx } from '../../core/db/index.js';
 import { add, gt, money, mul, type MoneyString } from '../../core/money.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
 import { issueDocumentNumber } from '../../core/numbering.js';
@@ -71,13 +71,14 @@ export interface IntakeInput {
 export async function createIntake(
   principal: Principal,
   input: IntakeInput,
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
   if (input.lines.length === 0) throw badRequest('Record at least one item received');
 
   const branchId = resolveBranchId(principal, input.branchId);
   assertBranchAccess(principal, branchId);
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const customer = await tx
       .selectFrom('customer')
       .select(['id', 'name'])
@@ -173,10 +174,11 @@ export interface ConsumeInput {
 export async function consumeMaterials(
   principal: Principal,
   input: ConsumeInput,
+  outerTx?: Tx,
 ): Promise<{ id: number; materialCost: MoneyString }> {
   if (input.lines.length === 0) throw badRequest('Add at least one material');
 
-  const intake = await db
+  const intake = await (outerTx ?? db)
     .selectFrom('lab_received')
     .selectAll()
     .where('id', '=', input.labReceivedId)
@@ -189,7 +191,7 @@ export async function consumeMaterials(
     throw conflict('This job has already been invoiced');
   }
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const ids = [...new Set(input.lines.map((l) => l.pid))];
 
     const raws = await tx
@@ -275,8 +277,9 @@ export interface LabInvoiceInput {
 export async function createLabInvoice(
   principal: Principal,
   input: LabInvoiceInput,
+  outerTx?: Tx,
 ): Promise<{ id: number; net: MoneyString }> {
-  const intake = await db
+  const intake = await (outerTx ?? db)
     .selectFrom('lab_received')
     .selectAll()
     .where('id', '=', input.labReceivedId)
@@ -289,7 +292,7 @@ export async function createLabInvoice(
     throw conflict('This job has already been invoiced');
   }
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const customer = await tx
       .selectFrom('customer')
       .select(['id', 'name', 'account_id'])
@@ -398,8 +401,12 @@ export async function createLabInvoice(
 }
 
 /** Mark a job ready for collection. No ledger impact. */
-export async function markReady(principal: Principal, labReceivedId: number): Promise<void> {
-  const intake = await db
+export async function markReady(
+  principal: Principal,
+  labReceivedId: number,
+  outerTx?: Tx,
+): Promise<void> {
+  const intake = await (outerTx ?? db)
     .selectFrom('lab_received')
     .select(['id', 'branch_id', 'status'])
     .where('id', '=', labReceivedId)
@@ -412,7 +419,7 @@ export async function markReady(principal: Principal, labReceivedId: number): Pr
     throw conflict('This job has already been invoiced');
   }
 
-  await withTransaction(async (tx) => {
+  await inTransaction(outerTx, async (tx) => {
     await tx
       .updateTable('lab_received')
       .set({ status: LAB_STATUS.READY, updated_at: new Date() })

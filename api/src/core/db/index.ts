@@ -25,6 +25,15 @@ export const pool = new Pool({
   max: config.DB_POOL_MAX,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
+
+  // Neon is serverless and reaps connections it believes are idle. Without TCP
+  // keepalives the client only discovers this on its next query, which surfaces
+  // as `Connection terminated unexpectedly` partway through a long run — it is
+  // what failed three test files on a five-minute suite. Keepalives hold the
+  // socket open; `idleTimeoutMillis` above still retires genuinely idle clients.
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000,
+
   // Every session runs in the business timezone so date_trunc and ::date
   // behave the way the accountants expect.
   options: `-c timezone=${config.TIMEZONE}`,
@@ -54,6 +63,31 @@ export type Executor = Db | Tx;
  */
 export async function withTransaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
   return db.transaction().execute(fn);
+}
+
+/**
+ * Run `fn` inside the caller's transaction when there is one, or open a new one.
+ *
+ * This is the seam that lets a service be tested without committing. A service
+ * that calls `withTransaction` directly cannot be wrapped by anything — which is
+ * why the tests for those services ended up writing committed rows to the shared
+ * Neon database and cleaning up in a `finally`. One of those cleanups deleted a
+ * live sale's ledger legs, because it filtered on `inv_id` without `vtype`.
+ *
+ * Every write service therefore takes an optional trailing `tx`. Production
+ * passes nothing and gets its own transaction; `tests/helpers/rollback.ts`
+ * passes the rollback transaction and nothing survives the test.
+ *
+ * Nesting note: passing a `tx` deliberately joins the caller's transaction
+ * rather than opening a nested one. Postgres has no true nested transactions,
+ * and a savepoint here would let an inner failure be swallowed while the outer
+ * work committed — exactly the half-recorded document invariant 3 forbids.
+ */
+export async function inTransaction<T>(
+  tx: Tx | undefined,
+  fn: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  return tx ? fn(tx) : withTransaction(fn);
 }
 
 export async function healthCheck(): Promise<boolean> {

@@ -1,19 +1,35 @@
 /**
  * Remittance and inter-branch dues (Phase 6).
  *
- * The accounting rule is tested pure; the full create→confirm flow is tested
- * against real Postgres and cleans up after itself.
+ * The accounting rule is tested pure; the full create→confirm flow runs inside
+ * `inRollback`.
+ *
+ * The earlier version of this file committed its rows and unwound them in a
+ * `finally` that ran `DELETE FROM transactions WHERE inv_id = <id>` with no
+ * `vtype`. `(vtype, inv_id)` is the real key — `inv_id` alone is only unique
+ * within a voucher type — so once a test remittance's id reached a live sale's
+ * id, that delete took the sale's ledger legs with it. It did: a sale was left
+ * with no accounting behind it. Nothing here writes outside the transaction now.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { ACC } from '../src/accounting/accounts.js';
 import { totals } from '../src/accounting/journal.js';
 import { postInterBranchDues, postRemittance } from '../src/accounting/rules/transfer.js';
-import { closeDb, db } from '../src/core/db/index.js';
+import { closeDb } from '../src/core/db/index.js';
 import { createRemittance, confirmRemittance, branchDues } from '../src/modules/remittance/service.js';
+import { inRollback } from './helpers/rollback.js';
 
-const PRINCIPAL = { userId: 0, username: 'super', empId: 0, branchId: 0, roleId: null, isSuperAdmin: true };
+const PRINCIPAL = {
+  userId: 0,
+  username: 'super',
+  empId: 0,
+  branchId: 0,
+  roleId: null,
+  isSuperAdmin: true,
+};
 
 const BRANCH_ACC = 1010600;
+const BRANCH = 9702;
 
 afterAll(async () => {
   await closeDb();
@@ -63,53 +79,124 @@ describe('remittance posting', () => {
 
 describe('remittance flow', () => {
   it('creates and confirms a remittance, moving the balance', async () => {
-    const suffix = Date.now();
+    await inRollback(async (tx) => {
+      const warehouse = await tx
+        .selectFrom('branch')
+        .select('id')
+        .where('type', '=', 'WAREHOUSE')
+        .executeTakeFirstOrThrow();
 
-    const warehouse = await db.selectFrom('branch').select('id').where('type', '=', 'WAREHOUSE').executeTakeFirstOrThrow();
+      await tx
+        .insertInto('branch')
+        .values({
+          id: BRANCH,
+          name: 'Remittance Test Branch',
+          code: 'RMTEST',
+          type: 'BRANCH',
+          inter_branch_account: BRANCH_ACC,
+        })
+        .onConflict((oc) => oc.column('id').doNothing())
+        .execute();
 
-    await db.insertInto('branch').values({ id: 9702, name: `BR ${suffix}`, code: `BR${suffix}`.slice(0, 10), type: 'BRANCH', inter_branch_account: BRANCH_ACC }).execute();
+      await tx
+        .insertInto('account')
+        .values({
+          name: 'Test Branch Due',
+          account_id: BRANCH_ACC,
+          head_id: 1,
+          sub_head_id: 1,
+          head_code: 1,
+          sub_code: 1,
+          third: 5,
+          is_fixed: false,
+          branch_id: BRANCH,
+        })
+        .onConflict((oc) => oc.column('account_id').doNothing())
+        .execute();
 
-    // The branch's inter-branch account — a real committed account the posting references.
-    await db
-      .insertInto('account')
-      .values({ name: 'Test Branch Due', account_id: BRANCH_ACC, head_id: 1, sub_head_id: 1, head_code: 1, sub_code: 1, third: 5, is_fixed: false, branch_id: 9702 })
-      .onConflict((oc) => oc.column('account_id').doNothing())
-      .execute();
-
-    let remId: number | null = null;
-
-    try {
       const rem = await createRemittance(
-        { ...PRINCIPAL, branchId: 9702, isSuperAdmin: false },
+        { ...PRINCIPAL, branchId: BRANCH, isSuperAdmin: false },
         { date: '2026-06-03', amount: '5000.00', method: 'CASH', toBranchId: warehouse.id },
+        tx,
       );
-      remId = rem.id;
       expect(rem.docNumber).toContain('RM');
 
-      await confirmRemittance({ ...PRINCIPAL, branchId: warehouse.id }, rem.id);
+      await confirmRemittance({ ...PRINCIPAL, branchId: warehouse.id }, rem.id, tx);
 
-      const confirmed = await db.selectFrom('remittance').select('status').where('id', '=', rem.id).executeTakeFirst();
+      const confirmed = await tx
+        .selectFrom('remittance')
+        .select('status')
+        .where('id', '=', rem.id)
+        .executeTakeFirst();
       expect(confirmed?.status).toBe('CONFIRMED');
 
       // Four legs: branch Dr due / Cr cash, warehouse Dr cash / Cr due.
-      const legs = await db.selectFrom('transactions').select(['dr', 'cr']).where('inv_id', '=', rem.id).execute();
+      // Scoped by vtype as well as inv_id — the two together are the key.
+      const legs = await tx
+        .selectFrom('transactions')
+        .select(['dr', 'cr'])
+        .where('vtype', '=', 'IBDUE')
+        .where('inv_id', '=', rem.id)
+        .execute();
       expect(totals(legs.map((l) => ({ dr: l.dr, cr: l.cr }))).imbalance).toBe('0.00');
       expect(legs).toHaveLength(4);
 
-      const dues = await branchDues();
-      const row = dues.find((d) => d.branchId === 9702);
+      const dues = await branchDues(tx);
+      const row = dues.find((d) => d.branchId === BRANCH);
       expect(row).toBeDefined();
       expect(Number(row!.remitted)).toBe(5000);
-    } finally {
-      if (remId !== null) {
-        await db.deleteFrom('transactions').where('inv_id', '=', remId).execute();
-        await db.deleteFrom('user_log').where('inv_id', '=', remId).execute();
-        await db.deleteFrom('remittance').where('id', '=', remId).execute();
-      }
-      await db.deleteFrom('account').where('account_id', '=', BRANCH_ACC).execute();
-      await db.deleteFrom('branch_product').where('branch_id', '=', 9702).execute();
-      await db.deleteFrom('document_counter').where('branch_id', '=', 9702).execute();
-      await db.deleteFrom('branch').where('id', '=', 9702).execute();
-    }
+    });
+  });
+
+  it('refuses to confirm the same remittance twice', async () => {
+    await inRollback(async (tx) => {
+      const warehouse = await tx
+        .selectFrom('branch')
+        .select('id')
+        .where('type', '=', 'WAREHOUSE')
+        .executeTakeFirstOrThrow();
+
+      await tx
+        .insertInto('branch')
+        .values({
+          id: BRANCH,
+          name: 'Remittance Test Branch',
+          code: 'RMTEST',
+          type: 'BRANCH',
+          inter_branch_account: BRANCH_ACC,
+        })
+        .onConflict((oc) => oc.column('id').doNothing())
+        .execute();
+
+      await tx
+        .insertInto('account')
+        .values({
+          name: 'Test Branch Due',
+          account_id: BRANCH_ACC,
+          head_id: 1,
+          sub_head_id: 1,
+          head_code: 1,
+          sub_code: 1,
+          third: 5,
+          is_fixed: false,
+          branch_id: BRANCH,
+        })
+        .onConflict((oc) => oc.column('account_id').doNothing())
+        .execute();
+
+      const rem = await createRemittance(
+        { ...PRINCIPAL, branchId: BRANCH, isSuperAdmin: false },
+        { date: '2026-06-03', amount: '5000.00', method: 'CASH', toBranchId: warehouse.id },
+        tx,
+      );
+
+      await confirmRemittance({ ...PRINCIPAL, branchId: warehouse.id }, rem.id, tx);
+
+      // Confirming twice would post the pair again and understate what the
+      // branch still owes.
+      await expect(
+        confirmRemittance({ ...PRINCIPAL, branchId: warehouse.id }, rem.id, tx),
+      ).rejects.toThrow(/already confirmed/i);
+    });
   });
 });

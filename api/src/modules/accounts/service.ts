@@ -22,7 +22,7 @@
  * advisory lock on the bucket, so concurrent callers queue instead of colliding.
  */
 import { sql } from 'kysely';
-import { db, withTransaction, type Tx } from '../../core/db/index.js';
+import { db, inTransaction, type Tx } from '../../core/db/index.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
 import { writeAudit } from '../../core/audit.js';
 import type { Principal } from '../../core/rbac.js';
@@ -214,8 +214,9 @@ export async function listAccounts(filter: AccountFilter) {
 export async function createAccount(
   principal: Principal,
   input: { name: string; subHeadId: number; thirdCode?: number; branchId: number },
+  outerTx?: Tx,
 ) {
-  const subHead = await db
+  const subHead = await (outerTx ?? db)
     .selectFrom('account_sub_head')
     .select(['id', 'code', 'head_id', 'head_code', 'name'])
     .where('id', '=', input.subHeadId)
@@ -223,7 +224,7 @@ export async function createAccount(
 
   if (!subHead) throw badRequest(`Unknown sub-head ${input.subHeadId}`);
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const bucket: AccountBucket = {
       headCode: subHead.head_code,
       subCode: subHead.code,
@@ -270,8 +271,9 @@ export async function renameAccount(
   principal: Principal,
   accountId: number,
   name: string,
+  outerTx?: Tx,
 ) {
-  const existing = await db
+  const existing = await (outerTx ?? db)
     .selectFrom('account')
     .select(['id', 'account_id', 'name', 'is_fixed'])
     .where('account_id', '=', accountId)
@@ -281,7 +283,7 @@ export async function renameAccount(
 
   // Fixed accounts are referenced by code in the posting rules; renaming is
   // harmless but deleting or renumbering is not, so only the label may change.
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const row = await tx
       .updateTable('account')
       .set({ name, updated_at: new Date(), updated_by: principal.empId })

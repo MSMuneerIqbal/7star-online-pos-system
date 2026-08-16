@@ -10,7 +10,7 @@
  * balance is REJECTED. The legacy UI relied on the operator to balance the
  * form and nothing checked it server-side.
  */
-import { db, withTransaction, type Tx } from '../../core/db/index.js';
+import { db, inTransaction, type Tx } from '../../core/db/index.js';
 import { add, gt, money, type MoneyString } from '../../core/money.js';
 import { badRequest, notFound, unprocessable } from '../../core/errors.js';
 import { writeAudit } from '../../core/audit.js';
@@ -86,6 +86,7 @@ function summarise(input: SaveVoucherInput): { total: MoneyString; count: number
 export async function createVoucher(
   principal: Principal,
   input: SaveVoucherInput,
+  outerTx?: Tx,
 ): Promise<{ id: number; transId: number }> {
   const branchId = resolveBranchId(principal, input.branchId);
   assertBranchAccess(principal, branchId);
@@ -93,7 +94,7 @@ export async function createVoucher(
   const meta = VOUCHER_TYPES[input.type];
   if (!meta) throw badRequest(`Unknown voucher type ${input.type}`);
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     await assertAccountsExist(tx, input.lines);
 
     // Reserve the document id first so the journal can reference it.
@@ -185,8 +186,9 @@ export async function updateVoucher(
   principal: Principal,
   voucherId: number,
   input: SaveVoucherInput,
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
-  const existing = await db
+  const existing = await (outerTx ?? db)
     .selectFrom('voucher_master')
     .select(['id', 'branch_id', 'type'])
     .where('id', '=', voucherId)
@@ -205,7 +207,7 @@ export async function updateVoucher(
   const meta = VOUCHER_TYPES[input.type];
   const branchId = resolveBranchId(principal, input.branchId ?? existing.branch_id);
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     await assertAccountsExist(tx, input.lines);
 
     const journal = postVoucher({
@@ -279,6 +281,7 @@ export async function updateVoucher(
 export async function saveOpeningBalance(
   principal: Principal,
   input: { accountId: number; date: string; dr: string; cr: string; detail?: string | null | undefined; branchId?: number | undefined },
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
   const branchId = resolveBranchId(principal, input.branchId);
 
@@ -286,7 +289,7 @@ export async function saveOpeningBalance(
     throw badRequest('An opening balance is either a debit or a credit, not both');
   }
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     await assertAccountsExist(tx, [{ accountId: input.accountId, dr: input.dr, cr: input.cr }]);
 
     const row = await tx

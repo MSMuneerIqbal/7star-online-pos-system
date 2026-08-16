@@ -5,7 +5,7 @@
  * expense posts Dr expense / Cr cash (or bank). The total flows into branch
  * profit: selling − wholesale − expenses.
  */
-import { db, withTransaction } from '../../core/db/index.js';
+import { db, inTransaction, type Executor, type Tx } from '../../core/db/index.js';
 import { sql } from 'kysely';
 import { badRequest, notFound } from '../../core/errors.js';
 import { dec, money } from '../../core/money.js';
@@ -28,6 +28,7 @@ export interface ExpenseInput {
 export async function createExpense(
   principal: Principal,
   input: ExpenseInput,
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
   const amount = dec(input.amount);
   if (amount.lte(0)) throw badRequest('Expense amount must be greater than zero');
@@ -36,14 +37,14 @@ export async function createExpense(
   const branchId = resolveBranchId(principal, input.branchId);
   assertBranchAccess(principal, branchId);
 
-  const category = await db
+  const category = await (outerTx ?? db)
     .selectFrom('expense_category')
     .select(['id', 'name', 'account_id'])
     .where('id', '=', input.categoryId)
     .executeTakeFirst();
   if (!category) throw badRequest(`Unknown expense category id ${input.categoryId}`);
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const row = await tx
       .insertInto('expense')
       .values({
@@ -88,7 +89,7 @@ export async function createExpense(
  * The month-based report: per-category totals for the given month, the previous
  * month beside it, and a full twelve-month table.
  */
-export async function expenseReport(): Promise<{
+export async function expenseReport(executor: Executor = db): Promise<{
   categories: Array<{ categoryId: number; name: string }>;
   month: string;
   monthTotal: string;
@@ -102,7 +103,7 @@ export async function expenseReport(): Promise<{
   const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const previousMonth = prevDate.toISOString().slice(0, 7);
 
-  const categories = await db
+  const categories = await executor
     .selectFrom('expense_category')
     .select(['id', 'name'])
     .where('is_active', '=', true)
@@ -117,7 +118,7 @@ export async function expenseReport(): Promise<{
     LEFT   JOIN expense e ON e.category_id = c.id
     GROUP  BY c.name
     ORDER  BY c.name
-  `.execute(db);
+  `.execute(executor);
 
   const year = await sql<{ month: string; total: string }>`
     SELECT to_char(d.m, 'YYYY-MM') AS month, COALESCE(SUM(e.amount), 0)::text AS total
@@ -125,7 +126,7 @@ export async function expenseReport(): Promise<{
     LEFT   JOIN expense e ON to_char(e.date, 'YYYY-MM') = to_char(d.m, 'YYYY-MM')
     GROUP  BY d.m
     ORDER  BY d.m
-  `.execute(db);
+  `.execute(executor);
 
   const monthTotal = byCategory.rows.reduce((acc, r) => acc.add(dec(r.thisMonth)), dec(0));
   const previousMonthTotal = byCategory.rows.reduce((acc, r) => acc.add(dec(r.lastMonth)), dec(0));

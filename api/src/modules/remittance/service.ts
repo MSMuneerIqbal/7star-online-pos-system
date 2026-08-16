@@ -6,7 +6,7 @@
  * cash falls; the warehouse's cash rises and its "due from branches" falls.
  * Moving money inside one company creates no revenue; the two sides cancel.
  */
-import { db, withTransaction } from '../../core/db/index.js';
+import { db, inTransaction, type Executor, type Tx } from '../../core/db/index.js';
 import { sql } from 'kysely';
 import { dec, money } from '../../core/money.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
@@ -29,8 +29,8 @@ export interface RemittanceInput {
   toBranchId?: number | undefined;
 }
 
-async function warehouseBranchId(): Promise<number> {
-  const w = await db
+async function warehouseBranchId(executor: Executor = db): Promise<number> {
+  const w = await executor
     .selectFrom('branch')
     .select('id')
     .where('type', '=', 'WAREHOUSE')
@@ -42,11 +42,12 @@ async function warehouseBranchId(): Promise<number> {
 export async function createRemittance(
   principal: Principal,
   input: RemittanceInput,
+  outerTx?: Tx,
 ): Promise<{ id: number; docNumber: string }> {
   const amount = dec(input.amount);
   if (amount.lte(0)) throw badRequest('Remittance amount must be greater than zero');
 
-  const toBranchId = input.toBranchId ?? (await warehouseBranchId());
+  const toBranchId = input.toBranchId ?? (await warehouseBranchId(outerTx ?? db));
   const fromBranchId = principal.isSuperAdmin ? (input.fromBranchId ?? 0) : principal.branchId;
 
   if (fromBranchId === 0) {
@@ -57,14 +58,14 @@ export async function createRemittance(
   }
   assertBranchAccess(principal, fromBranchId);
 
-  const branch = await db
+  const branch = await (outerTx ?? db)
     .selectFrom('branch')
     .select(['id', 'name'])
     .where('id', '=', fromBranchId)
     .executeTakeFirst();
   if (!branch) throw badRequest(`Unknown branch id ${fromBranchId}`);
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const { docNumber } = await issueDocumentNumber(tx, fromBranchId, 'REMITTANCE');
 
     const row = await tx
@@ -102,14 +103,15 @@ export async function createRemittance(
 export async function confirmRemittance(
   principal: Principal,
   id: number,
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
-  const rem = await db.selectFrom('remittance').selectAll().where('id', '=', id).executeTakeFirst();
+  const rem = await (outerTx ?? db).selectFrom('remittance').selectAll().where('id', '=', id).executeTakeFirst();
   if (!rem) throw notFound('Remittance');
   assertBranchAccess(principal, rem.to_branch);
 
   if (rem.status === 'CONFIRMED') throw conflict('This remittance is already confirmed');
 
-  const branch = await db
+  const branch = await (outerTx ?? db)
     .selectFrom('branch')
     .select(['id', 'name', 'inter_branch_account'])
     .where('id', '=', rem.from_branch)
@@ -118,7 +120,7 @@ export async function confirmRemittance(
     throw badRequest('This branch has no inter-branch account');
   }
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     for (const j of postRemittance({
       invId: rem.id,
       date: rem.date,
@@ -157,7 +159,7 @@ export async function confirmRemittance(
  * The branch dues report (SPECS §7): what each branch received at wholesale,
  * what it has remitted, what is in transit, and what it still owes.
  */
-export async function branchDues(): Promise<
+export async function branchDues(executor: Executor = db): Promise<
   Array<{
     branchId: number;
     branchName: string;
@@ -167,7 +169,7 @@ export async function branchDues(): Promise<
     stillOwed: string;
   }>
 > {
-  const branches = await db
+  const branches = await executor
     .selectFrom('branch')
     .select(['id', 'name'])
     .where('id', '>', 0)
@@ -180,14 +182,14 @@ export async function branchDues(): Promise<
     FROM   do_received_detail d
     JOIN   do_received r ON r.id = d.inv_id
     GROUP  BY r.to_branch
-  `.execute(db);
+  `.execute(executor);
 
   const remittedRows = await sql<{ branch_id: number; v: string }>`
     SELECT from_branch AS branch_id, COALESCE(SUM(amount), 0)::text AS v
     FROM   remittance
     WHERE  status = 'CONFIRMED'
     GROUP  BY from_branch
-  `.execute(db);
+  `.execute(executor);
 
   const transitRows = await sql<{ branch_id: number; v: string }>`
     SELECT r.to_branch AS branch_id, COALESCE(SUM(d.wholesale_price * d.qty), 0)::text AS v
@@ -195,7 +197,7 @@ export async function branchDues(): Promise<
     JOIN   do_request r ON r.id = d.inv_id
     WHERE  r.status = 'DESPATCHED'
     GROUP  BY r.to_branch
-  `.execute(db);
+  `.execute(executor);
 
   const received = new Map(receivedRows.rows.map((r) => [r.branch_id, r.v ?? '0']));
   const remitted = new Map(remittedRows.rows.map((r) => [r.branch_id, r.v ?? '0']));

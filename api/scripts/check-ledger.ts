@@ -3,10 +3,16 @@
  *
  *   npx tsx scripts/check-ledger.ts [invId]
  *
- * Reports any voucher whose debits and credits do not net to zero. On legacy
- * data this is the query that quantifies the damage from the unbalanced sale
- * posting (see db/accounts.md §4.1); on data written by this system it should
- * always come back clean.
+ * Two questions, because either one alone can pass on a broken ledger:
+ *
+ *   1. Does every voucher balance? Debits must net against credits. On legacy
+ *      data this is the query that quantifies the damage from the unbalanced
+ *      sale posting (see db/accounts.md §4.1).
+ *   2. Does every posted document HAVE a voucher? A balanced ledger and an
+ *      empty one look identical to question 1 — "no unbalanced vouchers" is
+ *      vacuously true with no vouchers at all. That blind spot let a run of the
+ *      test suite delete a live sale's legs without this script noticing, so
+ *      the orphan check below is not decoration.
  */
 import { sql } from 'kysely';
 import { db } from '../src/core/db/index.js';
@@ -74,6 +80,37 @@ const totals = await sql<{ vouchers: string; legs: string }>`
   FROM   transactions
 `.execute(db);
 
+/**
+ * Documents that should have posted but have no legs.
+ *
+ * `(vtype, inv_id)` is the key — `inv_id` alone is only unique within a voucher
+ * type, so a sale and a remittance can and do share one. Anything checking or
+ * deleting legs by `inv_id` on its own will hit the wrong document's ledger.
+ */
+const POSTING_DOCUMENTS: ReadonlyArray<{ table: string; vtype: string; label: string }> = [
+  { table: 'sale', vtype: 'SINV', label: 'Sale' },
+  { table: 'sale_return', vtype: 'SRINV', label: 'Sale return' },
+  { table: 'purchase', vtype: 'PINV', label: 'Purchase' },
+  { table: 'purchase_return', vtype: 'PRINV', label: 'Purchase return' },
+];
+
+const orphans: Array<{ label: string; id: number }> = [];
+
+for (const doc of POSTING_DOCUMENTS) {
+  const rows = await sql<{ id: number }>`
+    SELECT d.id
+    FROM   ${sql.table(doc.table)} d
+    WHERE  NOT EXISTS (
+      SELECT 1 FROM transactions t
+      WHERE  t.vtype = ${doc.vtype} AND t.inv_id = d.id
+    )
+    ORDER  BY d.id
+    LIMIT  20
+  `.execute(db);
+
+  for (const r of rows.rows) orphans.push({ label: doc.label, id: r.id });
+}
+
 const t = totals.rows[0]!;
 console.log(`\n${t.vouchers} voucher(s), ${t.legs} leg(s) in the ledger`);
 
@@ -86,5 +123,14 @@ if (unbalanced.rows.length === 0) {
   }
 }
 
+if (orphans.length === 0) {
+  console.log('PASS  every posted document has a voucher.');
+} else {
+  console.log(`FAIL  ${orphans.length} document(s) posted nothing to the ledger:`);
+  for (const o of orphans) {
+    console.log(`  ${o.label} ${o.id} has no legs — its accounting is missing.`);
+  }
+}
+
 await db.destroy();
-process.exit(unbalanced.rows.length === 0 ? 0 : 1);
+process.exit(unbalanced.rows.length === 0 && orphans.length === 0 ? 0 : 1);

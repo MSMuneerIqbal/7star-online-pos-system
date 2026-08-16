@@ -3,7 +3,7 @@
  * Not a branch sale — for the branch it is one less battery on the shelf, moving
  * at wholesale. The branch's dues fall when the warehouse accepts.
  */
-import { db, withTransaction } from '../../core/db/index.js';
+import { db, inTransaction, type Tx } from '../../core/db/index.js';
 import { add, dec, money, mul, qty } from '../../core/money.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
 import { writeAudit } from '../../core/audit.js';
@@ -30,19 +30,20 @@ export async function recordShipment(
     note?: string | null | undefined;
     lines: ShipmentLine[];
   },
+  outerTx?: Tx,
 ): Promise<{ id: number; docNumber: string }> {
   if (input.lines.length === 0) throw badRequest('Add at least one line');
   assertBranchAccess(principal, input.branchId);
 
   // A second shipment against the same website order is refused.
-  const clash = await db
+  const clash = await (outerTx ?? db)
     .selectFrom('estore_shipment')
     .select('id')
     .where('order_reference', '=', input.orderReference)
     .executeTakeFirst();
   if (clash) throw conflict(`Order reference "${input.orderReference}" has already been shipped`);
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const { docNumber } = await issueDocumentNumber(tx, input.branchId, 'ESTORE');
 
     // Value each line at the branch's wholesale cost.
@@ -102,13 +103,14 @@ export async function recordShipment(
 export async function acceptShipment(
   principal: Principal,
   id: number,
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
-  const shipment = await db.selectFrom('estore_shipment').selectAll().where('id', '=', id).executeTakeFirst();
+  const shipment = await (outerTx ?? db).selectFrom('estore_shipment').selectAll().where('id', '=', id).executeTakeFirst();
   if (!shipment) throw notFound('E-Store shipment');
 
   if (shipment.status !== 'RAISED') throw conflict(`This shipment is ${shipment.status?.toLowerCase()}`);
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const lines = await tx
       .selectFrom('estore_shipment_detail')
       .selectAll()
@@ -175,8 +177,9 @@ export async function rejectShipment(
   principal: Principal,
   id: number,
   reason: string,
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
-  const shipment = await db.selectFrom('estore_shipment').selectAll().where('id', '=', id).executeTakeFirst();
+  const shipment = await (outerTx ?? db).selectFrom('estore_shipment').selectAll().where('id', '=', id).executeTakeFirst();
   if (!shipment) throw notFound('E-Store shipment');
   if (shipment.status !== 'RAISED') throw conflict(`This shipment is ${shipment.status?.toLowerCase()}`);
   if (!reason.trim()) throw badRequest('Give a reason for the rejection');

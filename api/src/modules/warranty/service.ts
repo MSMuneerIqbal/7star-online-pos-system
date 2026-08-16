@@ -3,7 +3,7 @@
  * claims after. The warehouse assesses each claimed unit and carries the cost as
  * a warranty expense; the branch is never charged and its dues do not move.
  */
-import { db, withTransaction } from '../../core/db/index.js';
+import { db, withTransaction, type Tx } from '../../core/db/index.js';
 import { add, dec, money, mul, qty } from '../../core/money.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
 import { writeAudit } from '../../core/audit.js';
@@ -26,7 +26,23 @@ export async function createClaim(
   if (input.lines.length === 0) throw badRequest('Add at least one claimed unit');
   assertBranchAccess(principal, input.branchId);
 
-  return withTransaction(async (tx) => {
+  return withTransaction((tx) => createClaimInTx(tx, principal, input));
+}
+
+/**
+ * The transaction-taking half.
+ *
+ * Split out so a test can run it inside `inRollback` — a service that opens its
+ * own transaction against the global `db` cannot be wrapped, which is what
+ * pushed the earlier warranty test into committing against the live Neon
+ * database. See `tests/helpers/rollback.ts`.
+ */
+export async function createClaimInTx(
+  tx: Tx,
+  principal: Principal,
+  input: { date: string; branchId: number; note?: string | null | undefined; lines: ClaimLine[] },
+): Promise<{ id: number; docNumber: string }> {
+  {
     const { docNumber } = await issueDocumentNumber(tx, input.branchId, 'WARRANTY');
 
     const claim = await tx
@@ -55,7 +71,7 @@ export async function createClaim(
     );
 
     return { id: claim.id, docNumber };
-  });
+  }
 }
 
 export interface ResolutionLine {
@@ -70,7 +86,19 @@ export async function resolveClaim(
   principal: Principal,
   input: { claimId: number; date: string; warehouseBranchId: number; lines: ResolutionLine[] },
 ): Promise<{ id: number }> {
-  const claim = await db
+  return withTransaction((tx) => resolveClaimInTx(tx, principal, input));
+}
+
+/** See the note on `createClaimInTx` — this is the half a rollback test can wrap. */
+export async function resolveClaimInTx(
+  tx: Tx,
+  principal: Principal,
+  input: { claimId: number; date: string; warehouseBranchId: number; lines: ResolutionLine[] },
+): Promise<{ id: number }> {
+  // Read inside the transaction: reading through the global `db` first left a
+  // window where the claim could close between the check and the write, and it
+  // made the guard invisible to a rollback test.
+  const claim = await tx
     .selectFrom('warranty_claim')
     .selectAll()
     .where('id', '=', input.claimId)
@@ -80,7 +108,7 @@ export async function resolveClaim(
 
   if (claim.status === 'CLOSED') throw conflict('This claim is already closed');
 
-  return withTransaction(async (tx) => {
+  {
     for (const line of input.lines) {
       const product = await tx
         .selectFrom('product')
@@ -169,5 +197,5 @@ export async function resolveClaim(
     );
 
     return { id: claim.id };
-  });
+  }
 }

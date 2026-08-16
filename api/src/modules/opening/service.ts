@@ -5,7 +5,7 @@
  * stock is special: it is inventory with a value behind it, so it also writes an
  * `opening_stock` row that the stock-movement view reads as quantity in.
  */
-import { db, withTransaction } from '../../core/db/index.js';
+import { db, inTransaction, type Tx } from '../../core/db/index.js';
 import { dec, money, qty } from '../../core/money.js';
 import { badRequest } from '../../core/errors.js';
 import { writeAudit } from '../../core/audit.js';
@@ -17,6 +17,7 @@ import { postJournal } from '../../accounting/post.js';
 export async function recordOpeningStock(
   principal: Principal,
   input: { date: string; branchId: number; kind: 'RAW' | 'FINISH'; pid: number; qty: string; cost: string },
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
   const branchId = resolveBranchId(principal, input.branchId);
   assertBranchAccess(principal, branchId);
@@ -26,7 +27,7 @@ export async function recordOpeningStock(
 
   const inventory = input.kind === 'FINISH' ? ACC.INVENTORY_FINISH : ACC.INVENTORY_RAW;
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const row = await tx
       .insertInto('opening_stock')
       .values({
@@ -71,13 +72,14 @@ export async function recordOpeningStock(
 export async function recordOpeningBalance(
   principal: Principal,
   input: { date: string; branchId: number; accountId: number; amount: string; debit: boolean; detail?: string | null | undefined },
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
   const branchId = resolveBranchId(principal, input.branchId);
   assertBranchAccess(principal, branchId);
 
   if (dec(input.amount).lte(0)) throw badRequest('Opening amount must be greater than zero');
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const amount = money(input.amount);
 
     await postJournal(

@@ -14,7 +14,7 @@
  * opening stock at it rather than writing three more importers.
  */
 import ExcelJS from 'exceljs';
-import { db, withTransaction } from '../../core/db/index.js';
+import { db, inTransaction, type Executor, type Tx } from '../../core/db/index.js';
 import { badRequest } from '../../core/errors.js';
 import { writeAudit } from '../../core/audit.js';
 import type { Principal } from '../../core/rbac.js';
@@ -241,11 +241,11 @@ function normalizeRow(
   };
 }
 
-async function loadContext(): Promise<ImportContext> {
+async function loadContext(executor: Executor = db): Promise<ImportContext> {
   const [raws, brands, categories] = await Promise.all([
-    db.selectFrom('raw_product').select(['id', 'name']).execute(),
-    db.selectFrom('brand').select(['id', 'name']).execute(),
-    db.selectFrom('category').select(['id', 'name']).execute(),
+    executor.selectFrom('raw_product').select(['id', 'name']).execute(),
+    executor.selectFrom('brand').select(['id', 'name']).execute(),
+    executor.selectFrom('category').select(['id', 'name']).execute(),
   ]);
 
   const rawByName = new Map<string, number>();
@@ -294,14 +294,15 @@ export async function previewRawImport(buffer: Buffer): Promise<{ rows: PreviewR
 export async function commitRawImport(
   principal: Principal,
   rows: RawImportRow[],
+  outerTx?: Tx,
 ): Promise<{ created: number; updated: number; skipped: Array<{ name: string; errors: string[] }> }> {
-  const ctx = await loadContext();
+  const ctx = await loadContext(outerTx ?? db);
 
   let created = 0;
   let updated = 0;
   const skipped: Array<{ name: string; errors: string[] }> = [];
 
-  await withTransaction(async (tx) => {
+  await inTransaction(outerTx, async (tx) => {
     for (const row of rows) {
       const { row: checked, errors } = normalizeRow(rowToData(row), ctx);
 

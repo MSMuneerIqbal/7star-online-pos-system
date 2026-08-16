@@ -12,6 +12,7 @@ import { buildApp } from '../src/app.js';
 import { signAccessToken } from '../src/core/auth/tokens.js';
 import { closeDb, db } from '../src/core/db/index.js';
 import { commitRawImport, previewRawImport, type RawImportRow } from '../src/modules/import/service.js';
+import { inRollback } from './helpers/rollback.js';
 
 let app: FastifyInstance;
 
@@ -94,37 +95,40 @@ describe('previewRawImport', () => {
 
 describe('commitRawImport', () => {
   it('inserts new rows, updates matches and skips invalid rows', async () => {
-    const suffix = Date.now();
-    const existingName = `Commit Existing ${suffix}`;
+    await inRollback(async (tx) => {
+      const existingName = 'Commit Existing Row';
 
-    const existing = await db
-      .insertInto('raw_product')
-      .values({ name: existingName, price: '5' })
-      .returning('id')
-      .executeTakeFirstOrThrow();
+      await tx
+        .insertInto('raw_product')
+        .values({ name: existingName, price: '5' })
+        .returning('id')
+        .executeTakeFirstOrThrow();
 
-    try {
-      const res = await commitRawImport(SUPER, [
-        cellRow(`Commit New ${suffix}`, '100'),
-        { ...cellRow(existingName, '9'), partType: 'OTHER' },
-        cellRow(`Commit Bad ${suffix}`, '-1'),
-      ]);
+      const res = await commitRawImport(
+        SUPER,
+        [
+          cellRow('Commit New Row', '100'),
+          { ...cellRow(existingName, '9'), partType: 'OTHER' },
+          cellRow('Commit Bad Row', '-1'),
+        ],
+        tx,
+      );
 
       expect(res.created).toBe(1);
       expect(res.updated).toBe(1);
       expect(res.skipped).toHaveLength(1);
       expect(res.skipped[0]!.errors).toContain('Cost must be a non-negative number');
 
-      const created = await db
+      const created = await tx
         .selectFrom('raw_product')
         .selectAll()
-        .where('name', '=', `Commit New ${suffix}`)
+        .where('name', '=', 'Commit New Row')
         .executeTakeFirst();
       expect(created?.part_type).toBe('CELL');
       expect(created?.cell_capacity_mah).toBe(2000);
       expect(created?.cell_brand).toBe('LG');
 
-      const updated = await db
+      const updated = await tx
         .selectFrom('raw_product')
         .selectAll()
         .where('name', '=', existingName)
@@ -133,11 +137,7 @@ describe('commitRawImport', () => {
       expect(updated?.part_type).toBe('OTHER');
       // Cell fields dropped on the non-CELL update.
       expect(updated?.cell_brand).toBeNull();
-    } finally {
-      await db.deleteFrom('raw_product').where('name', 'like', `Commit %${suffix}`).execute();
-      await db.deleteFrom('raw_product').where('id', '=', existing.id).execute();
-      await db.deleteFrom('user_log').where('action', '=', 'Import').execute();
-    }
+    });
   });
 });
 

@@ -10,6 +10,23 @@ import { db, type Tx } from '../../src/core/db/index.js';
  * Caveat: sequences are non-transactional by design, so `nextval` values are
  * consumed even on rollback. Tests must therefore assert that ids are
  * *distinct and increasing*, never that they equal a specific number.
+ *
+ * USE THIS. Every write service takes an optional trailing `tx` (see
+ * `inTransaction` in `core/db`) precisely so it can be driven from here.
+ *
+ * Why it is not optional: the services that once lacked that seam had tests
+ * which committed instead, then unwound themselves in a `finally`. One of those
+ * cleanups ran `DELETE FROM transactions WHERE inv_id = <id>` with no `vtype`.
+ * `(vtype, inv_id)` is the real key — `inv_id` alone is only unique within a
+ * voucher type — so when a test document's id reached a live sale's id, the
+ * delete took that sale's ledger legs with it. A real sale was left with no
+ * accounting behind it, and `check-ledger.ts` reported PASS throughout because
+ * it only asked whether vouchers balanced, never whether documents had any.
+ *
+ * The one legitimate exception is a test that needs two transactions to see
+ * each other — `numbering.test.ts` proves concurrent issuers do not collide,
+ * which cannot be observed from inside a single transaction. Such a test must
+ * scope every cleanup by `vtype` as well as `inv_id`, and say why in a comment.
  */
 class Rollback extends Error {
   constructor() {

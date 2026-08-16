@@ -2,17 +2,27 @@
  * Production tests (Phase 4 — reshape).
  *
  * The posting rule is material-only now (no conversion cost), and the module is
- * the issue-to-worker → output flow. The rule is tested pure; the flow is tested
- * against real Postgres and cleans up after itself.
+ * the issue-to-worker → output flow. The rule is tested pure; the flow runs
+ * inside `inRollback`.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { ACC } from '../src/accounting/accounts.js';
 import { totals } from '../src/accounting/journal.js';
 import { postProduction } from '../src/accounting/rules/production.js';
-import { closeDb, db } from '../src/core/db/index.js';
+import { closeDb } from '../src/core/db/index.js';
 import { createIssue, recordOutput } from '../src/modules/production/service.js';
+import { inRollback } from './helpers/rollback.js';
 
-const PRINCIPAL = { userId: 0, username: 'super', empId: 0, branchId: 0, roleId: null, isSuperAdmin: true };
+const PRINCIPAL = {
+  userId: 0,
+  username: 'super',
+  empId: 0,
+  branchId: 0,
+  roleId: null,
+  isSuperAdmin: true,
+};
+
+const BRANCH = 9600;
 
 afterAll(async () => {
   await closeDb();
@@ -37,113 +47,99 @@ describe('production posting', () => {
 
 describe('issue → output flow', () => {
   it('issues a cart, records output, absorbs damage, and prices the product', async () => {
-    const suffix = Date.now();
-    const branchId = 9600;
+    await inRollback(async (tx) => {
+      // The branch's fan-out trigger creates the document counters the issue
+      // number draws from. The posting accounts are fixed chart-of-accounts rows
+      // that already exist.
+      await tx
+        .insertInto('branch')
+        .values({ id: BRANCH, name: 'Production Test Branch', code: 'PRTEST' })
+        .onConflict((oc) => oc.column('id').doNothing())
+        .execute();
 
-    // A real branch, committed — its fan-out trigger creates the document
-    // counters the issue number draws from. The posting accounts are fixed
-    // chart-of-accounts rows that already exist.
-    await db
-      .insertInto('branch')
-      .values({ id: branchId, name: `Production Branch ${suffix}`, code: `T${branchId}` })
-      .execute();
+      const worker = await tx
+        .insertInto('worker')
+        .values({ name: 'Production Test Worker' })
+        .returning('id')
+        .executeTakeFirstOrThrow();
 
-    const worker = await db
-      .insertInto('worker')
-      .values({ name: `Worker ${suffix}` })
-      .returning('id')
-      .executeTakeFirstOrThrow();
+      const cell = await tx
+        .insertInto('raw_product')
+        .values({ name: 'Production Test Cell', price: '1000.00' })
+        .returning('id')
+        .executeTakeFirstOrThrow();
 
-    const cell = await db
-      .insertInto('raw_product')
-      .values({ name: `Cell ${suffix}`, price: '1000.00' })
-      .returning('id')
-      .executeTakeFirstOrThrow();
+      const product = await tx
+        .insertInto('product')
+        .values({ name: 'Production Test Battery', price: '0.00', type: 'NEW', placement: 'INT' })
+        .returning('id')
+        .executeTakeFirstOrThrow();
 
-    const product = await db
-      .insertInto('product')
-      .values({ name: `Battery ${suffix}`, price: '0.00', type: 'NEW', placement: 'INT' })
-      .returning('id')
-      .executeTakeFirstOrThrow();
-
-    let issueId: number | null = null;
-    let outputId: number | null = null;
-
-    try {
-      const issue = await createIssue(PRINCIPAL, {
-        date: '2026-06-01',
-        workerId: worker.id,
-        branchId,
-        lines: [{ pid: cell.id, qty: '10' }],
-      });
-      issueId = issue.id;
+      const issue = await createIssue(
+        PRINCIPAL,
+        {
+          date: '2026-06-01',
+          workerId: worker.id,
+          branchId: BRANCH,
+          lines: [{ pid: cell.id, qty: '10' }],
+        },
+        tx,
+      );
       expect(issue.docNumber).toMatch(/-\d+$/);
 
-      const out = await recordOutput(PRINCIPAL, {
-        issueId: issue.id,
-        date: '2026-06-02',
-        productId: product.id,
-        qty: '8',
-        damaged: [{ pid: cell.id, qty: '2', reason: 'broken tab' }],
-      });
-      outputId = out.id;
+      const out = await recordOutput(
+        PRINCIPAL,
+        {
+          issueId: issue.id,
+          date: '2026-06-02',
+          productId: product.id,
+          qty: '8',
+          damaged: [{ pid: cell.id, qty: '2', reason: 'broken tab' }],
+        },
+        tx,
+      );
 
       // 10 cells at 1000 each = 10000 material, absorbed into 8 batteries.
       expect(out.perUnit).toBe('1250.00');
       expect(out.totalCost).toBe('10000.00');
 
-      const updated = await db
+      const updated = await tx
         .selectFrom('product')
         .select('price')
         .where('id', '=', product.id)
         .executeTakeFirst();
       expect(updated?.price).toBe('1250.00');
 
-      const used = await db
+      const used = await tx
         .selectFrom('used_stock')
         .select('qty')
         .where('issue_id', '=', issue.id)
         .executeTakeFirst();
       expect(used?.qty).toBe('8.000');
 
-      const damaged = await db
+      const damaged = await tx
         .selectFrom('damaged_stock')
         .select('qty')
         .where('issue_id', '=', issue.id)
         .executeTakeFirst();
       expect(damaged?.qty).toBe('2.000');
 
-      const legs = await db
+      // Damaged stock is a record, not an accounting entry (PRINCIPLES §4).
+      const damageLegs = await tx
+        .selectFrom('transactions')
+        .select(({ fn }) => fn.countAll<string>().as('n'))
+        .where('vtype', '=', 'PFINV')
+        .where('inv_id', '=', issue.id)
+        .executeTakeFirstOrThrow();
+      expect(Number(damageLegs.n)).toBe(0);
+
+      const legs = await tx
         .selectFrom('transactions')
         .select(['dr', 'cr'])
+        .where('vtype', '=', 'PFINV')
         .where('inv_id', '=', out.id)
         .execute();
       expect(totals(legs.map((l) => ({ dr: l.dr, cr: l.cr }))).imbalance).toBe('0.00');
-    } finally {
-      // Scope by the production voucher type — document ids are not unique
-      // across tables, so a bare inv_id match could hit a stale test row.
-      if (outputId !== null) {
-        await db
-          .deleteFrom('transactions')
-          .where('vtype', '=', 'PFINV')
-          .where('inv_id', '=', outputId)
-          .execute();
-      }
-      if (issueId !== null) {
-        await db.deleteFrom('damaged_stock').where('issue_id', '=', issueId).execute();
-        await db.deleteFrom('used_stock').where('issue_id', '=', issueId).execute();
-        await db.deleteFrom('production_output').where('issue_id', '=', issueId).execute();
-        await db.deleteFrom('production_issue_detail').where('issue_id', '=', issueId).execute();
-        await db.deleteFrom('production_issue').where('id', '=', issueId).execute();
-        await db.deleteFrom('user_log').where('inv_id', '=', issueId).execute();
-      }
-      if (outputId !== null) await db.deleteFrom('user_log').where('inv_id', '=', outputId).execute();
-      await db.deleteFrom('product').where('id', '=', product.id).execute();
-      await db.deleteFrom('raw_product').where('id', '=', cell.id).execute();
-      await db.deleteFrom('worker').where('id', '=', worker.id).execute();
-      await db.deleteFrom('branch_product').where('branch_id', '=', branchId).execute();
-      await db.deleteFrom('document_counter').where('branch_id', '=', branchId).execute();
-      await db.deleteFrom('branch').where('id', '=', branchId).execute();
-    }
+    });
   });
 });

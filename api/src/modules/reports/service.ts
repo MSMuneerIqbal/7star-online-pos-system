@@ -13,7 +13,7 @@
  * types that move inventory.
  */
 import { sql } from 'kysely';
-import { db } from '../../core/db/index.js';
+import { db, type Executor } from '../../core/db/index.js';
 import { add, sub, type MoneyString } from '../../core/money.js';
 import { notFound } from '../../core/errors.js';
 import { ACC } from '../../accounting/accounts.js';
@@ -382,8 +382,16 @@ interface StatementLine {
  */
 async function balancesByHead(
   heads: readonly number[],
-  opts: { from?: string | undefined; to: string; branchId: number | null; debitNormal: boolean },
+  opts: {
+    from?: string | undefined;
+    to: string;
+    branchId: number | null;
+    debitNormal: boolean;
+    /** Lets a test seed a known ledger and read it back inside a rollback. */
+    executor?: Executor | undefined;
+  },
 ): Promise<StatementLine[]> {
+  const executor = opts.executor ?? db;
   const rows = await sql<{ account_id: number; name: string | null; dr: string; cr: string }>`
     SELECT a.account_id, a.name,
            COALESCE(SUM(t.dr), 0)::text AS dr,
@@ -396,7 +404,7 @@ async function balancesByHead(
     ${opts.branchId === null ? sql`` : sql`AND t.branch_id = ${opts.branchId}`}
     GROUP  BY a.account_id, a.name
     ORDER  BY a.account_id
-  `.execute(db);
+  `.execute(executor);
 
   return rows.rows
     .map((r) => ({
@@ -445,16 +453,16 @@ export async function getIncomeStatement(principal: Principal, opts: DateRange) 
  */
 export async function getBalanceSheet(
   principal: Principal,
-  opts: { asAt: string; branchId?: number | undefined },
+  opts: { asAt: string; branchId?: number | undefined; executor?: Executor | undefined },
 ) {
   const branchId = scope(principal, opts.branchId);
 
   const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
-    balancesByHead([1], { to: opts.asAt, branchId, debitNormal: true }),
-    balancesByHead([2], { to: opts.asAt, branchId, debitNormal: false }),
-    balancesByHead([3], { to: opts.asAt, branchId, debitNormal: false }),
-    balancesByHead([4], { to: opts.asAt, branchId, debitNormal: false }),
-    balancesByHead([5], { to: opts.asAt, branchId, debitNormal: true }),
+    balancesByHead([1], { to: opts.asAt, branchId, debitNormal: true, executor: opts.executor }),
+    balancesByHead([2], { to: opts.asAt, branchId, debitNormal: false, executor: opts.executor }),
+    balancesByHead([3], { to: opts.asAt, branchId, debitNormal: false, executor: opts.executor }),
+    balancesByHead([4], { to: opts.asAt, branchId, debitNormal: false, executor: opts.executor }),
+    balancesByHead([5], { to: opts.asAt, branchId, debitNormal: true, executor: opts.executor }),
   ]);
 
   const totalAssets = assets.reduce((a, l) => add(a, l.amount), '0.00');

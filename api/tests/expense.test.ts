@@ -1,13 +1,25 @@
 /**
  * Expenses (Phase 8) — one branch, one date, one category, one description,
  * posting Dr expense / Cr cash.
+ *
+ * Runs inside `inRollback`. Nothing reaches the shared database.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { totals } from '../src/accounting/journal.js';
-import { closeDb, db } from '../src/core/db/index.js';
+import { closeDb } from '../src/core/db/index.js';
 import { createExpense, expenseReport } from '../src/modules/expense/service.js';
+import { inRollback } from './helpers/rollback.js';
 
-const PRINCIPAL = { userId: 0, username: 'super', empId: 0, branchId: 0, roleId: null, isSuperAdmin: true };
+const PRINCIPAL = {
+  userId: 0,
+  username: 'super',
+  empId: 0,
+  branchId: 0,
+  roleId: null,
+  isSuperAdmin: true,
+};
+
+const BRANCH = 9800;
 
 afterAll(async () => {
   await closeDb();
@@ -15,35 +27,68 @@ afterAll(async () => {
 
 describe('expenses', () => {
   it('posts a balanced voucher and lands in the month report', async () => {
-    const suffix = Date.now();
-    const category = await db.selectFrom('expense_category').select(['id', 'account_id']).executeTakeFirstOrThrow();
+    await inRollback(async (tx) => {
+      const category = await tx
+        .selectFrom('expense_category')
+        .select(['id', 'account_id'])
+        .executeTakeFirstOrThrow();
 
-    await db.insertInto('branch').values({ id: 9800, name: `EXP ${suffix}`, code: `EX${suffix}`.slice(0, 10), type: 'BRANCH' }).execute();
+      await tx
+        .insertInto('branch')
+        .values({ id: BRANCH, name: 'Expense Test Branch', code: 'EXTEST', type: 'BRANCH' })
+        .onConflict((oc) => oc.column('id').doNothing())
+        .execute();
 
-    let expId: number | null = null;
-    try {
       const exp = await createExpense(
-        { ...PRINCIPAL, branchId: 9800, isSuperAdmin: false },
-        { date: '2026-08-01', categoryId: category.id, amount: '1500.00', method: 'CASH', description: 'Shop rent' },
+        { ...PRINCIPAL, branchId: BRANCH, isSuperAdmin: false },
+        {
+          date: '2026-08-01',
+          categoryId: category.id,
+          amount: '1500.00',
+          method: 'CASH',
+          description: 'Shop rent',
+        },
+        tx,
       );
-      expId = exp.id;
 
-      const legs = await db.selectFrom('transactions').select(['account_id', 'dr', 'cr']).where('inv_id', '=', exp.id).execute();
-      expect(totals(legs.map((l) => ({ accountId: l.account_id, dr: l.dr, cr: l.cr, detail: '' }))).imbalance).toBe('0.00');
+      const legs = await tx
+        .selectFrom('transactions')
+        .select(['account_id', 'dr', 'cr'])
+        .where('vtype', '=', 'CPV')
+        .where('inv_id', '=', exp.id)
+        .execute();
+
+      expect(
+        totals(legs.map((l) => ({ accountId: l.account_id, dr: l.dr, cr: l.cr, detail: '' }))).imbalance,
+      ).toBe('0.00');
       expect(legs.find((l) => l.account_id === category.account_id)?.dr).toBe('1500.00');
 
-      const report = await expenseReport();
+      const report = await expenseReport(tx);
       expect(report.byCategory.length).toBeGreaterThan(0);
       expect(report.monthTotal).toBeDefined();
-    } finally {
-      if (expId !== null) {
-        await db.deleteFrom('transactions').where('inv_id', '=', expId).execute();
-        await db.deleteFrom('user_log').where('inv_id', '=', expId).execute();
-        await db.deleteFrom('expense').where('id', '=', expId).execute();
-      }
-      await db.deleteFrom('branch_product').where('branch_id', '=', 9800).execute();
-      await db.deleteFrom('document_counter').where('branch_id', '=', 9800).execute();
-      await db.deleteFrom('branch').where('id', '=', 9800).execute();
-    }
+    });
+  });
+
+  it('refuses a zero or negative amount', async () => {
+    await inRollback(async (tx) => {
+      const category = await tx
+        .selectFrom('expense_category')
+        .select(['id'])
+        .executeTakeFirstOrThrow();
+
+      await expect(
+        createExpense(
+          { ...PRINCIPAL, branchId: BRANCH, isSuperAdmin: false },
+          {
+            date: '2026-08-01',
+            categoryId: category.id,
+            amount: '0',
+            method: 'CASH',
+            description: 'Nothing',
+          },
+          tx,
+        ),
+      ).rejects.toThrow(/greater than zero/i);
+    });
   });
 });

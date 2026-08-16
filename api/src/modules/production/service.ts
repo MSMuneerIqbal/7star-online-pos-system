@@ -13,7 +13,7 @@
  * Damaged material is absorbed into the surviving batteries (per_unit = total
  * material ÷ ready count), so the voucher always balances with no damage leg.
  */
-import { db, withTransaction, type Tx } from '../../core/db/index.js';
+import { db, inTransaction, type Tx } from '../../core/db/index.js';
 import { add, dec, money, mul, qty, type MoneyString } from '../../core/money.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
 import { writeAudit } from '../../core/audit.js';
@@ -61,13 +61,14 @@ export interface OutputInput {
 export async function createIssue(
   principal: Principal,
   input: IssueInput,
+  outerTx?: Tx,
 ): Promise<{ id: number; docNumber: string }> {
   if (input.lines.length === 0) throw badRequest('Add at least one part to the cart');
 
   const branchId = resolveBranchId(principal, input.branchId);
   assertBranchAccess(principal, branchId);
 
-  const worker = await db
+  const worker = await (outerTx ?? db)
     .selectFrom('worker')
     .select(['id', 'name'])
     .where('id', '=', input.workerId)
@@ -76,12 +77,12 @@ export async function createIssue(
   if (!worker) throw badRequest(`Unknown or inactive worker id ${input.workerId}`);
 
   const ids = [...new Set(input.lines.map((l) => l.pid))];
-  const raws = await db.selectFrom('raw_product').select(['id', 'name', 'price']).where('id', 'in', ids).execute();
+  const raws = await (outerTx ?? db).selectFrom('raw_product').select(['id', 'name', 'price']).where('id', 'in', ids).execute();
   const byId = new Map(raws.map((r) => [r.id, r]));
   const missing = ids.filter((id) => !byId.has(id));
   if (missing.length > 0) throw badRequest(`Unknown raw item id(s): ${missing.join(', ')}`);
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const { docNumber } = await issueDocumentNumber(tx, branchId, 'PRODUCTION');
 
     const issue = await tx
@@ -137,8 +138,9 @@ export async function createIssue(
 export async function recordOutput(
   principal: Principal,
   input: OutputInput,
+  outerTx?: Tx,
 ): Promise<{ id: number; perUnit: MoneyString; totalCost: MoneyString }> {
-  const issue = await db
+  const issue = await (outerTx ?? db)
     .selectFrom('production_issue')
     .selectAll()
     .where('id', '=', input.issueId)
@@ -148,7 +150,7 @@ export async function recordOutput(
 
   if (issue.status !== 'OPEN') throw conflict('This issue is already closed');
 
-  const detail = await db
+  const detail = await (outerTx ?? db)
     .selectFrom('production_issue_detail')
     .selectAll()
     .where('issue_id', '=', input.issueId)
@@ -158,7 +160,7 @@ export async function recordOutput(
   const readyQty = dec(input.qty);
   if (readyQty.lte(0)) throw badRequest('Record at least one ready battery');
 
-  const product = await db
+  const product = await (outerTx ?? db)
     .selectFrom('product')
     .select(['id', 'name'])
     .where('id', '=', input.productId)
@@ -185,7 +187,7 @@ export async function recordOutput(
     damagedByPid.set(d.pid, totalDamaged.toNumber());
   }
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const output = await tx
       .insertInto('production_output')
       .values({
@@ -310,11 +312,12 @@ export async function damageBattery(
     reason?: string | null | undefined;
     branchId?: number | undefined;
   },
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
   const branchId = resolveBranchId(principal, input.branchId);
   assertBranchAccess(principal, branchId);
 
-  const product = await db
+  const product = await (outerTx ?? db)
     .selectFrom('product')
     .select(['id', 'name', 'price'])
     .where('id', '=', input.productId)
@@ -323,7 +326,7 @@ export async function damageBattery(
 
   if (dec(input.qty).lte(0)) throw badRequest('Damaged quantity must be greater than zero');
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const row = await tx
       .insertInto('damaged_stock')
       .values({
@@ -367,15 +370,16 @@ export async function reworkBattery(
     qty: string;
     note?: string | null | undefined;
   },
+  outerTx?: Tx,
 ): Promise<{ id: number }> {
-  const product = await db
+  const product = await (outerTx ?? db)
     .selectFrom('product')
     .select(['id', 'name'])
     .where('id', '=', input.productId)
     .executeTakeFirst();
   if (!product) throw badRequest(`Unknown product id ${input.productId}`);
 
-  const worker = await db
+  const worker = await (outerTx ?? db)
     .selectFrom('worker')
     .select('id')
     .where('id', '=', input.workerId)
@@ -384,7 +388,7 @@ export async function reworkBattery(
 
   if (dec(input.qty).lte(0)) throw badRequest('Rework quantity must be greater than zero');
 
-  return withTransaction(async (tx) => {
+  return inTransaction(outerTx, async (tx) => {
     const row = await tx
       .insertInto('rework')
       .values({

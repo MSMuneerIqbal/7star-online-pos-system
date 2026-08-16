@@ -6,8 +6,11 @@
  * balance sheet would never have balanced. The assertions below are the proof
  * that they do now.
  *
- * Read-only, so no rollback wrapper is needed — but they must not assume an
- * empty database, since they run against the shared instance.
+ * Mostly read-only, so most need no rollback wrapper. The rule they follow is
+ * that an assertion must hold for ANY database state — empty or not. Anything
+ * that needs specific figures seeds them inside `inRollback` and reads them back
+ * through the `executor` option, rather than hoping the shared instance happens
+ * to contain something.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { add, sub } from '../src/core/money.js';
@@ -15,6 +18,8 @@ import { closeDb, db } from '../src/core/db/index.js';
 import * as reports from '../src/modules/reports/service.js';
 import { getTrialBalance } from '../src/modules/ledger/service.js';
 import type { Principal } from '../src/core/rbac.js';
+import { ACC } from '../src/accounting/accounts.js';
+import { inRollback } from './helpers/rollback.js';
 
 /** A super admin sees every branch, which is what the statements need. */
 const admin: Principal = {
@@ -57,12 +62,57 @@ describe('balance sheet', () => {
   });
 
   it('reports assets on the debit side and liabilities on the credit side', async () => {
-    const bs = await reports.getBalanceSheet(admin, { asAt: AS_AT });
+    // Seeds its own voucher rather than reading whatever happens to be in the
+    // database. The assertion here is about SIGN NORMALISATION — assets read
+    // positive from a debit balance — and that has nothing to do with how much
+    // trading has been done.
+    //
+    // It used to assert `totalAssets > 0` against ambient data, which passed
+    // only because the shared database happened to hold a few vouchers. When
+    // the ledger was emptied the test failed, having never actually exercised
+    // the behaviour it names. A test that depends on data it did not create is
+    // a coin flip.
+    await inRollback(async (tx) => {
+      await tx
+        .insertInto('transactions')
+        .values([
+          {
+            date: '2026-01-01',
+            vtype: 'JV',
+            inv_id: 990001,
+            trans_id: 990001,
+            voucher_no: 990001,
+            account_id: ACC.CASH,
+            dr: '7500.00',
+            cr: '0.00',
+            detail: 'Balance sheet sign test',
+            branch_id: 0,
+          },
+          {
+            date: '2026-01-01',
+            vtype: 'JV',
+            inv_id: 990001,
+            trans_id: 990001,
+            voucher_no: 990001,
+            account_id: ACC.OWNER_CAPITAL,
+            dr: '0.00',
+            cr: '7500.00',
+            detail: 'Balance sheet sign test',
+            branch_id: 0,
+          },
+        ])
+        .execute();
 
-    // Signs are normalised per head, so a healthy set of books shows positive
-    // figures on both sides rather than one side negative.
-    expect(Number(bs.totalAssets)).toBeGreaterThan(0);
-    for (const line of bs.assets) expect(line.name).toBeTruthy();
+      const bs = await reports.getBalanceSheet(admin, { asAt: AS_AT, executor: tx });
+
+      // A debit balance on an asset account reads positive, not negative.
+      expect(Number(bs.totalAssets)).toBeGreaterThan(0);
+      expect(bs.assets.some((l) => l.accountId === ACC.CASH)).toBe(true);
+      for (const line of bs.assets) expect(line.name).toBeTruthy();
+
+      // And the identity still holds on a set of books we control exactly.
+      expect(bs.totalAssets).toBe(bs.totalEquityAndLiabilities);
+    });
   });
 });
 
